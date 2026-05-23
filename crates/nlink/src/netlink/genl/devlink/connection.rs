@@ -333,6 +333,88 @@ impl Connection<Devlink> {
     }
 
     // =========================================================================
+    // Rate-object CRUD (Plan 153.2) — SR-IOV VF / scheduler-node
+    // rate-limiting via devlink-rate. Reuses the existing
+    // devlink_cmd_builder helper for the bus/device prefix.
+    // =========================================================================
+
+    /// Create a new devlink rate object. Sets `rate_type`,
+    /// `node_name`, and any of `tx_share` / `tx_max` /
+    /// `parent_node` that the builder populated.
+    ///
+    /// On NICs without rate support (most non-SmartNIC hardware),
+    /// the kernel returns `EOPNOTSUPP` — callers dispatch via
+    /// `Error::is_not_supported()`.
+    #[tracing::instrument(level = "debug", skip_all, fields(method = "add_rate"))]
+    pub async fn add_rate(&self, rate: &super::types::DevlinkRate) -> Result<()> {
+        self.send_rate(DEVLINK_CMD_RATE_NEW, rate).await
+    }
+
+    /// Update an existing devlink rate object's fields.
+    #[tracing::instrument(level = "debug", skip_all, fields(method = "set_rate"))]
+    pub async fn set_rate(&self, rate: &super::types::DevlinkRate) -> Result<()> {
+        self.send_rate(DEVLINK_CMD_RATE_SET, rate).await
+    }
+
+    /// Delete a devlink rate object (`Leaf` or `Node`) by
+    /// (bus, device, node_name).
+    #[tracing::instrument(level = "debug", skip_all, fields(method = "del_rate"))]
+    pub async fn del_rate(
+        &self,
+        bus: &str,
+        device: &str,
+        node_name: &str,
+    ) -> Result<()> {
+        let mut builder = self.devlink_cmd_builder(DEVLINK_CMD_RATE_DEL, bus, device);
+        builder.append_attr_str(DEVLINK_ATTR_RATE_NODE_NAME, node_name);
+        self.devlink_send_ack(builder).await
+    }
+
+    /// Set port-function state. Used to activate/deactivate the
+    /// SR-IOV VF underlying a devlink port without tearing it
+    /// down — see [`super::types::DevlinkPortFunctionState`].
+    #[tracing::instrument(level = "debug", skip_all, fields(method = "set_port_function_state"))]
+    pub async fn set_port_function_state(
+        &self,
+        bus: &str,
+        device: &str,
+        port_index: u32,
+        state: super::types::DevlinkPortFunctionState,
+    ) -> Result<()> {
+        let mut builder =
+            self.devlink_cmd_builder(DEVLINK_CMD_PORT_FUNCTION_SET, bus, device);
+        builder.append_attr_u32(DEVLINK_ATTR_PORT_INDEX, port_index);
+        // DEVLINK_ATTR_PORT_FUNCTION is a NESTED attribute carrying
+        // DEVLINK_ATTR_PORT_FUNCTION_STATE = u8.
+        let nested = builder.nest_start(DEVLINK_ATTR_PORT_FUNCTION | 0x8000);
+        builder.append_attr(DEVLINK_ATTR_PORT_FUNCTION_STATE, &[state.as_u8()]);
+        builder.nest_end(nested);
+        self.devlink_send_ack(builder).await
+    }
+
+    /// Shared implementation for `add_rate` / `set_rate` — the
+    /// only difference is the command byte (NEW vs SET).
+    async fn send_rate(
+        &self,
+        cmd: u8,
+        rate: &super::types::DevlinkRate,
+    ) -> Result<()> {
+        let mut builder = self.devlink_cmd_builder(cmd, &rate.bus_name, &rate.device_name);
+        builder.append_attr_str(DEVLINK_ATTR_RATE_NODE_NAME, &rate.node_name);
+        builder.append_attr_u16(DEVLINK_ATTR_RATE_TYPE, rate.rate_type.as_u16());
+        if let Some(share) = rate.tx_share {
+            builder.append_attr_u64(DEVLINK_ATTR_RATE_TX_SHARE, share);
+        }
+        if let Some(max) = rate.tx_max {
+            builder.append_attr_u64(DEVLINK_ATTR_RATE_TX_MAX, max);
+        }
+        if let Some(parent) = &rate.parent_node {
+            builder.append_attr_str(DEVLINK_ATTR_RATE_PARENT_NODE_NAME, parent);
+        }
+        self.devlink_send_ack(builder).await
+    }
+
+    // =========================================================================
     // Port Split/Unsplit
     // =========================================================================
 

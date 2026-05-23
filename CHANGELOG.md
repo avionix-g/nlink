@@ -6,6 +6,32 @@ All notable changes to this project will be documented in this file.
 
 ### Added
 
+- **Devlink rate + port-function-state**
+  (`Connection::<Devlink>::{add_rate, set_rate, del_rate,
+  set_port_function_state}`). Cloud + SmartNIC users use these to
+  rate-limit SR-IOV VFs at the kernel/firmware boundary (vs in
+  the guest's TC stack) and to activate/deactivate VFs without
+  tearing them down.
+
+  Public surface:
+  - `DevlinkRate` typed builder (bus + device + node_name +
+    optional parent_node + tx_share + tx_max + rate_type) — takes
+    `nlink::Rate` for the bandwidth fields so the bytes/sec
+    convention is enforced by the type system rather than
+    documentation.
+  - `DevlinkRateType::{Leaf, Node}` for terminal-VF vs
+    scheduler-node semantics.
+  - `DevlinkPortFunctionState::{Inactive, Active}` for port-function
+    activation.
+  - `DEVLINK_CMD_RATE_{NEW, SET, DEL, GET}` (74/75/76/77),
+    `DEVLINK_CMD_PORT_FUNCTION_SET` (68),
+    `DEVLINK_ATTR_RATE_*` + `DEVLINK_ATTR_PORT_FUNCTION_STATE`
+    constants — all pinned to kernel UAPI values by unit tests.
+
+  On NICs without rate support (most non-SmartNIC hardware), the
+  kernel returns `EOPNOTSUPP` — callers dispatch via
+  `Error::is_not_supported()`. See Plan 153 §4.2.
+
 - **XFRM IPsec hardware offload** — `XfrmSaBuilder::offload(ifindex,
   flags)` requests kernel push the SA's crypto / packet path onto a
   NIC (mlx5, hns3, etc.). `XfrmOffloadFlag` bitwise-newtype with
