@@ -26,6 +26,38 @@ impl Connection<Nftables> {
     /// ```
     #[tracing::instrument(level = "debug", skip_all, fields(method = "add_table"))]
     pub async fn add_table(&self, name: &str, family: Family) -> Result<()> {
+        self.add_table_with_flags(name, family, 0).await
+    }
+
+    /// Add a table with the given `flags` bitmask. Combine the
+    /// `NFT_TABLE_F_*` constants from [`super::NFT_TABLE_F_DORMANT`],
+    /// [`super::NFT_TABLE_F_OWNER`], and [`super::NFT_TABLE_F_PERSIST`].
+    ///
+    /// Most callers want plain [`Self::add_table`] (flags = 0); use
+    /// this method when you need a dormant table, owner-locked table,
+    /// or persistent table (kernel 6.9+ for `NFT_TABLE_F_PERSIST`).
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// use nlink::{Connection, Nftables};
+    /// use nlink::netlink::nftables::{Family, NFT_TABLE_F_PERSIST};
+    ///
+    /// let conn = Connection::<Nftables>::new()?;
+    /// // Create a table that survives `nft flush ruleset`.
+    /// conn.add_table_with_flags("filter", Family::Inet, NFT_TABLE_F_PERSIST).await?;
+    /// ```
+    #[tracing::instrument(
+        level = "debug",
+        skip_all,
+        fields(method = "add_table_with_flags", flags)
+    )]
+    pub async fn add_table_with_flags(
+        &self,
+        name: &str,
+        family: Family,
+        flags: u32,
+    ) -> Result<()> {
         if name.is_empty() || name.len() > 256 {
             return Err(Error::InvalidMessage(
                 "table name must be 1-256 characters".into(),
@@ -39,6 +71,12 @@ impl Connection<Nftables> {
         let nfgenmsg = NfGenMsg::new(family);
         builder.append(&nfgenmsg);
         builder.append_attr_str(NFTA_TABLE_NAME, name);
+        if flags != 0 {
+            // NFTA_TABLE_FLAGS is big-endian per kernel convention
+            // (matches the existing list_tables parser at
+            // `parse_table` which reads it as `from_be_bytes`).
+            builder.append_attr_u32_be(NFTA_TABLE_FLAGS, flags);
+        }
 
         self.nft_request_ack(builder).await
     }

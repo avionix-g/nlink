@@ -723,6 +723,51 @@ impl Connection<Route> {
         Ok(links.into_iter().find(|l| l.ifindex() == index))
     }
 
+    /// Get the kernel-reported per-link statistics for the named or
+    /// indexed interface.
+    ///
+    /// Convenience wrapper around `get_link_by_*` + `LinkMessage::stats()`.
+    /// Returns `Err(InterfaceNotFound)` if no interface matches, and
+    /// `Err(InvalidMessage)` if the kernel response didn't include a
+    /// stats attribute (rare — most interfaces always report stats).
+    ///
+    /// # Namespace safety
+    ///
+    /// Takes `impl Into<InterfaceRef>`. With a `Name` variant, the
+    /// initial lookup reads from the namespace this connection is
+    /// bound to (via netlink, not `/sys/class/net/`) — so name
+    /// resolution is namespace-correct.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// use nlink::{Connection, Route};
+    ///
+    /// let conn = Connection::<Route>::new()?;
+    /// let stats = conn.get_link_stats("eth0").await?;
+    /// println!("rx: {} bytes / {} packets", stats.rx_bytes, stats.rx_packets);
+    /// ```
+    #[tracing::instrument(level = "debug", skip_all, fields(method = "get_link_stats"))]
+    pub async fn get_link_stats(
+        &self,
+        iface: impl Into<InterfaceRef>,
+    ) -> Result<crate::netlink::messages::LinkStats> {
+        let iface = iface.into();
+        let label = match &iface {
+            InterfaceRef::Name(n) => n.clone(),
+            InterfaceRef::Index(i) => i.to_string(),
+        };
+        let link = self
+            .get_link_by_name(iface)
+            .await?
+            .ok_or_else(|| Error::InterfaceNotFound { name: label.clone() })?;
+        link.stats().copied().ok_or_else(|| {
+            Error::InvalidMessage(format!(
+                "interface {label} response did not include link-stats attribute"
+            ))
+        })
+    }
+
     /// Resolve an interface reference to an index.
     ///
     /// This method is namespace-safe: it uses netlink to resolve interface names,

@@ -6,6 +6,31 @@ All notable changes to this project will be documented in this file.
 
 ### Added
 
+- **Crate-root re-exports** for route / address / rule builders and
+  the extension traits. Previously reachable only via deep
+  `nlink::netlink::route::Ipv4Route`-style paths; now also surfaced
+  as `nlink::Ipv4Route`, `nlink::Ipv6Route`, `nlink::NextHop`,
+  `nlink::RouteMetrics`, `nlink::RouteConfig`, `nlink::Ipv4Address`,
+  `nlink::Ipv6Address`, `nlink::AddressConfig`, `nlink::RuleBuilder`,
+  `nlink::LinkConfig`, `nlink::NeighborConfig`. Pure additive.
+  See Plan 148 §4.3.
+
+- **`Connection::<Route>::get_link_stats(iface)`** convenience
+  wrapper that returns the kernel-reported per-link `LinkStats`
+  for a named or indexed interface. `Err(InterfaceNotFound)` if no
+  match; `Err(InvalidMessage)` if the kernel response didn't
+  include a stats attribute (rare). See Plan 148 §4.2.
+
+- **`NFT_TABLE_F_PERSIST` (kernel 6.9+) and related table-flag
+  constants** + `Connection::<Nftables>::add_table_with_flags(name,
+  family, flags)` connection method. Lets users create tables that
+  survive `nft flush ruleset` operations issued against the same
+  family. Also exposes `NFT_TABLE_F_DORMANT` and
+  `NFT_TABLE_F_OWNER` (the latter from kernel 5.13+). Existing
+  `add_table(name, family)` is unchanged (defaults to flags = 0).
+  Unit tests pin the constants against the kernel UAPI header
+  values. See Plan 148 §4.8.
+
 - **Namespace-safety doc story** — added a "Namespace safety —
   `_by_index` vs `_by_name`" section to `lib.rs`'s rustdoc landing
   page and to `CLAUDE.md` ("Namespace-safe APIs" subsection of

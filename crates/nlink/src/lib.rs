@@ -220,3 +220,19 @@ pub use netlink::{Generic, Nftables, Route, Wireguard};
 // boundaries). Use these in new code; the kernel's unit confusion (bits/sec
 // vs bytes/sec, decimal vs binary) is handled at type construction.
 pub use util::{Bytes, Percent, Rate};
+
+// ---- Plan 148 §4.3 re-export hygiene ----------------------------------
+// The route / address / rule builders and the extension traits users
+// implement to add custom link/addr/route/neighbor types. Previously
+// reachable only via deep `nlink::netlink::route::Ipv4Route`-style
+// paths; surface them at the crate root for shorter imports.
+
+// Route builders + nested types.
+pub use netlink::route::{Ipv4Route, Ipv6Route, NextHop, RouteConfig, RouteMetrics};
+// Address builders + extension trait.
+pub use netlink::addr::{AddressConfig, Ipv4Address, Ipv6Address};
+// Rule builder.
+pub use netlink::rule::RuleBuilder;
+// Link + neighbor extension traits for custom impl.
+pub use netlink::link::LinkConfig;
+pub use netlink::neigh::NeighborConfig;

@@ -90,6 +90,17 @@ pub const NFTA_TABLE_FLAGS: u16 = 2;
 pub const NFTA_TABLE_USE: u16 = 3;
 pub const NFTA_TABLE_HANDLE: u16 = 4;
 
+/// `NFT_TABLE_F_DORMANT` — table is dormant (chains don't fire).
+pub const NFT_TABLE_F_DORMANT: u32 = 0x1;
+/// `NFT_TABLE_F_OWNER` — table is owned by the creating socket
+/// (auto-deleted on socket close). Kernel 5.13+.
+pub const NFT_TABLE_F_OWNER: u32 = 0x2;
+/// `NFT_TABLE_F_PERSIST` — table survives `nft flush ruleset` issued
+/// against the same family. Kernel 6.9+. Pair with
+/// [`Connection<Nftables>::add_table_with_flags`](super::Connection) to
+/// create a table that the operator can't accidentally flush away.
+pub const NFT_TABLE_F_PERSIST: u32 = 0x4;
+
 // =============================================================================
 // Chain Attributes
 // =============================================================================
@@ -264,3 +275,26 @@ impl NfGenMsg {
 
 /// Size of NfGenMsg header.
 pub const NFGENMSG_HDRLEN: usize = 4;
+
+#[cfg(test)]
+mod table_flag_tests {
+    use super::*;
+
+    #[test]
+    fn nft_table_flags_match_kernel_uapi() {
+        // Values from include/uapi/linux/netfilter/nf_tables.h.
+        // These are part of the public ABI and must not drift.
+        assert_eq!(NFT_TABLE_F_DORMANT, 0x1);
+        assert_eq!(NFT_TABLE_F_OWNER, 0x2);
+        assert_eq!(NFT_TABLE_F_PERSIST, 0x4);
+    }
+
+    #[test]
+    fn table_flags_compose_via_bitor() {
+        // Verify users can combine flags the natural way.
+        let combined = NFT_TABLE_F_DORMANT | NFT_TABLE_F_PERSIST;
+        assert_eq!(combined & NFT_TABLE_F_DORMANT, NFT_TABLE_F_DORMANT);
+        assert_eq!(combined & NFT_TABLE_F_PERSIST, NFT_TABLE_F_PERSIST);
+        assert_eq!(combined & NFT_TABLE_F_OWNER, 0);
+    }
+}
