@@ -1,6 +1,8 @@
 //! nftables data types: Family, Hook, Chain, Rule, Table, etc.
 
-use std::net::Ipv4Addr;
+use std::net::{Ipv4Addr, Ipv6Addr};
+
+use super::expr::Expr;
 
 /// nftables address family.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -516,83 +518,81 @@ impl Rule {
         self
     }
 
-    /// Match source IPv4 address with prefix length.
-    pub fn match_saddr_v4(mut self, addr: Ipv4Addr, prefix: u8) -> Self {
-        use super::expr::Expr;
-        // Load source IP (offset 12 in IPv4 header)
+    /// Emit `Payload(Network) [+ Bitwise mask] + Cmp(op)` for an
+    /// address match. Used by the v4/v6 `match_{s,d}addr*` helpers.
+    /// When `prefix >= full_prefix` the bitwise mask is skipped
+    /// (exact-match fast path); otherwise a network mask is applied
+    /// to the loaded bytes and compared against the masked address.
+    fn push_addr_match(
+        &mut self,
+        octets: &[u8],
+        offset: u32,
+        prefix: u8,
+        full_prefix: u8,
+        op: CmpOp,
+    ) {
+        let len = octets.len() as u32;
         self.exprs.push(Expr::Payload {
             dreg: Register::R0,
             base: PayloadBase::Network,
-            offset: 12,
-            len: 4,
+            offset,
+            len,
         });
-        if prefix == 32 {
+        if prefix >= full_prefix {
             self.exprs.push(Expr::Cmp {
                 sreg: Register::R0,
-                op: CmpOp::Eq,
-                data: addr.octets().to_vec(),
+                op,
+                data: octets.to_vec(),
             });
-        } else {
-            let mask = prefix_to_mask_v4(prefix);
-            self.exprs.push(Expr::Bitwise {
-                sreg: Register::R0,
-                dreg: Register::R0,
-                len: 4,
-                mask: mask.to_vec(),
-                xor: vec![0; 4],
-            });
-            let masked_addr: Vec<u8> = addr
-                .octets()
-                .iter()
-                .zip(mask.iter())
-                .map(|(a, m)| a & m)
-                .collect();
-            self.exprs.push(Expr::Cmp {
-                sreg: Register::R0,
-                op: CmpOp::Eq,
-                data: masked_addr,
-            });
+            return;
         }
+        let mask = prefix_to_mask(octets.len(), prefix);
+        let masked: Vec<u8> = octets.iter().zip(&mask).map(|(a, m)| a & m).collect();
+        self.exprs.push(Expr::Bitwise {
+            sreg: Register::R0,
+            dreg: Register::R0,
+            len,
+            mask,
+            xor: vec![0; octets.len()],
+        });
+        self.exprs.push(Expr::Cmp {
+            sreg: Register::R0,
+            op,
+            data: masked,
+        });
+    }
+
+    /// Match source IPv4 address with prefix length. Operates on the
+    /// IP header (`PayloadBase::Network`), so use only on chains that
+    /// see IPv4 traffic (`ip`/`inet`/`netdev` family).
+    pub fn match_saddr_v4(mut self, addr: Ipv4Addr, prefix: u8) -> Self {
+        // Source IP at offset 12 in the IPv4 header.
+        self.push_addr_match(&addr.octets(), 12, prefix, 32, CmpOp::Eq);
         self
     }
 
-    /// Match destination IPv4 address with prefix length.
+    /// Match source IPv6 address with prefix length. Operates on the
+    /// IP header, so use only on chains that see IPv6 traffic
+    /// (`ip6`/`inet`/`netdev` family).
+    pub fn match_saddr_v6(mut self, addr: Ipv6Addr, prefix: u8) -> Self {
+        // Source IP at offset 8 in the IPv6 header.
+        self.push_addr_match(&addr.octets(), 8, prefix, 128, CmpOp::Eq);
+        self
+    }
+
+    /// Match destination IPv4 address with prefix length. Operates on
+    /// the IP header, so use only on chains that see IPv4 traffic.
     pub fn match_daddr_v4(mut self, addr: Ipv4Addr, prefix: u8) -> Self {
-        use super::expr::Expr;
-        // Load destination IP (offset 16 in IPv4 header)
-        self.exprs.push(Expr::Payload {
-            dreg: Register::R0,
-            base: PayloadBase::Network,
-            offset: 16,
-            len: 4,
-        });
-        if prefix == 32 {
-            self.exprs.push(Expr::Cmp {
-                sreg: Register::R0,
-                op: CmpOp::Eq,
-                data: addr.octets().to_vec(),
-            });
-        } else {
-            let mask = prefix_to_mask_v4(prefix);
-            self.exprs.push(Expr::Bitwise {
-                sreg: Register::R0,
-                dreg: Register::R0,
-                len: 4,
-                mask: mask.to_vec(),
-                xor: vec![0; 4],
-            });
-            let masked_addr: Vec<u8> = addr
-                .octets()
-                .iter()
-                .zip(mask.iter())
-                .map(|(a, m)| a & m)
-                .collect();
-            self.exprs.push(Expr::Cmp {
-                sreg: Register::R0,
-                op: CmpOp::Eq,
-                data: masked_addr,
-            });
-        }
+        // Destination IP at offset 16 in the IPv4 header.
+        self.push_addr_match(&addr.octets(), 16, prefix, 32, CmpOp::Eq);
+        self
+    }
+
+    /// Match destination IPv6 address with prefix length. Operates on
+    /// the IP header, so use only on chains that see IPv6 traffic.
+    pub fn match_daddr_v6(mut self, addr: Ipv6Addr, prefix: u8) -> Self {
+        // Destination IP at offset 24 in the IPv6 header.
+        self.push_addr_match(&addr.octets(), 24, prefix, 128, CmpOp::Eq);
         self
     }
 
@@ -945,81 +945,35 @@ impl Rule {
         self
     }
 
-    /// Match source IPv4 address not equal to the given address/prefix.
+    /// Match source IPv4 address not in the given address/prefix.
+    /// For prefixes shorter than 32, "not equal" means "outside the
+    /// subnet" — the load is masked before comparison.
     pub fn match_saddr_v4_not(mut self, addr: Ipv4Addr, prefix: u8) -> Self {
-        use super::expr::Expr;
-        self.exprs.push(Expr::Payload {
-            dreg: Register::R0,
-            base: PayloadBase::Network,
-            offset: 12,
-            len: 4,
-        });
-        if prefix == 32 {
-            self.exprs.push(Expr::Cmp {
-                sreg: Register::R0,
-                op: CmpOp::Neq,
-                data: addr.octets().to_vec(),
-            });
-        } else {
-            let mask = prefix_to_mask_v4(prefix);
-            self.exprs.push(Expr::Bitwise {
-                sreg: Register::R0,
-                dreg: Register::R0,
-                len: 4,
-                mask: mask.to_vec(),
-                xor: vec![0; 4],
-            });
-            let masked_addr: Vec<u8> = addr
-                .octets()
-                .iter()
-                .zip(mask.iter())
-                .map(|(a, m)| a & m)
-                .collect();
-            self.exprs.push(Expr::Cmp {
-                sreg: Register::R0,
-                op: CmpOp::Neq,
-                data: masked_addr,
-            });
-        }
+        self.push_addr_match(&addr.octets(), 12, prefix, 32, CmpOp::Neq);
         self
     }
 
-    /// Match destination IPv4 address not equal to the given address/prefix.
+    /// Match source IPv6 address not in the given address/prefix.
+    /// For prefixes shorter than 128, "not equal" means "outside the
+    /// subnet" — the load is masked before comparison.
+    pub fn match_saddr_v6_not(mut self, addr: Ipv6Addr, prefix: u8) -> Self {
+        self.push_addr_match(&addr.octets(), 8, prefix, 128, CmpOp::Neq);
+        self
+    }
+
+    /// Match destination IPv4 address not in the given address/prefix.
+    /// For prefixes shorter than 32, "not equal" means "outside the
+    /// subnet" — the load is masked before comparison.
     pub fn match_daddr_v4_not(mut self, addr: Ipv4Addr, prefix: u8) -> Self {
-        use super::expr::Expr;
-        self.exprs.push(Expr::Payload {
-            dreg: Register::R0,
-            base: PayloadBase::Network,
-            offset: 16,
-            len: 4,
-        });
-        if prefix == 32 {
-            self.exprs.push(Expr::Cmp {
-                sreg: Register::R0,
-                op: CmpOp::Neq,
-                data: addr.octets().to_vec(),
-            });
-        } else {
-            let mask = prefix_to_mask_v4(prefix);
-            self.exprs.push(Expr::Bitwise {
-                sreg: Register::R0,
-                dreg: Register::R0,
-                len: 4,
-                mask: mask.to_vec(),
-                xor: vec![0; 4],
-            });
-            let masked_addr: Vec<u8> = addr
-                .octets()
-                .iter()
-                .zip(mask.iter())
-                .map(|(a, m)| a & m)
-                .collect();
-            self.exprs.push(Expr::Cmp {
-                sreg: Register::R0,
-                op: CmpOp::Neq,
-                data: masked_addr,
-            });
-        }
+        self.push_addr_match(&addr.octets(), 16, prefix, 32, CmpOp::Neq);
+        self
+    }
+
+    /// Match destination IPv6 address not in the given address/prefix.
+    /// For prefixes shorter than 128, "not equal" means "outside the
+    /// subnet" — the load is masked before comparison.
+    pub fn match_daddr_v6_not(mut self, addr: Ipv6Addr, prefix: u8) -> Self {
+        self.push_addr_match(&addr.octets(), 24, prefix, 128, CmpOp::Neq);
         self
     }
 
@@ -1263,13 +1217,20 @@ pub struct SetInfo {
     pub handle: u64,
 }
 
-/// Convert a prefix length to a network mask (4 bytes).
-fn prefix_to_mask_v4(prefix: u8) -> [u8; 4] {
-    if prefix == 0 {
-        return [0; 4];
+/// Convert a prefix length to a network mask of `width` bytes.
+/// `prefix` is clamped to `width * 8`.
+fn prefix_to_mask(width: usize, prefix: u8) -> Vec<u8> {
+    let prefix = (prefix as usize).min(width * 8);
+    let full_bytes = prefix / 8;
+    let remainder = prefix % 8;
+    let mut mask = vec![0u8; width];
+    for byte in mask.iter_mut().take(full_bytes) {
+        *byte = 0xff;
     }
-    let mask = !0u32 << (32 - prefix.min(32));
-    mask.to_be_bytes()
+    if remainder != 0 && full_bytes < width {
+        mask[full_bytes] = 0xff << (8 - remainder);
+    }
+    mask
 }
 
 #[cfg(test)]
@@ -1321,5 +1282,141 @@ mod tests {
         assert_eq!(nat.family, Family::Ip);
         assert_eq!(nat.port, Some(1024));
         assert_eq!(nat.addr, Some("192.168.1.1".parse().unwrap()));
+    }
+
+    // ------------------------------------------------------------
+    // IPv6 match helpers
+    // ------------------------------------------------------------
+
+    use super::super::expr::Expr;
+
+    fn payload_exprs(rule: &Rule) -> Vec<(PayloadBase, u32, u32)> {
+        rule.exprs
+            .iter()
+            .filter_map(|e| match e {
+                Expr::Payload {
+                    base, offset, len, ..
+                } => Some((*base, *offset, *len)),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn cmp_exprs(rule: &Rule) -> Vec<(CmpOp, Vec<u8>)> {
+        rule.exprs
+            .iter()
+            .filter_map(|e| match e {
+                Expr::Cmp { op, data, .. } => Some((*op, data.clone())),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn bitwise_exprs(rule: &Rule) -> Vec<Vec<u8>> {
+        rule.exprs
+            .iter()
+            .filter_map(|e| match e {
+                Expr::Bitwise { mask, .. } => Some(mask.clone()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn match_saddr_v6_exact() {
+        let addr: Ipv6Addr = "2001:db8::1".parse().unwrap();
+        let rule = Rule::new("filter", "input").match_saddr_v6(addr, 128);
+        let payloads = payload_exprs(&rule);
+        let cmps = cmp_exprs(&rule);
+        assert_eq!(payloads, vec![(PayloadBase::Network, 8, 16)]);
+        assert_eq!(cmps.len(), 1);
+        assert_eq!(cmps[0].0, CmpOp::Eq);
+        assert_eq!(cmps[0].1, addr.octets().to_vec());
+        assert!(bitwise_exprs(&rule).is_empty(), "no mask for /128");
+    }
+
+    #[test]
+    fn match_saddr_v6_with_prefix() {
+        let addr: Ipv6Addr = "2001:db8:cafe::beef".parse().unwrap();
+        let rule = Rule::new("filter", "input").match_saddr_v6(addr, 64);
+        let payloads = payload_exprs(&rule);
+        let cmps = cmp_exprs(&rule);
+        let masks = bitwise_exprs(&rule);
+        assert_eq!(payloads, vec![(PayloadBase::Network, 8, 16)]);
+        assert_eq!(masks.len(), 1);
+        assert_eq!(masks[0], prefix_to_mask(16, 64));
+        assert_eq!(cmps.len(), 1);
+        assert_eq!(cmps[0].0, CmpOp::Eq);
+        let expected: Vec<u8> = addr
+            .octets()
+            .iter()
+            .zip(prefix_to_mask(16, 64).iter())
+            .map(|(a, m)| a & m)
+            .collect();
+        assert_eq!(cmps[0].1, expected);
+    }
+
+    #[test]
+    fn match_saddr_v6_overlong_prefix_takes_fast_path() {
+        // prefix > 128 is clamped to exact-match: no Bitwise emitted.
+        let addr: Ipv6Addr = "2001:db8::1".parse().unwrap();
+        let rule = Rule::new("filter", "input").match_saddr_v6(addr, 200);
+        assert!(bitwise_exprs(&rule).is_empty());
+        let cmps = cmp_exprs(&rule);
+        assert_eq!(cmps.len(), 1);
+        assert_eq!(cmps[0].1, addr.octets().to_vec());
+    }
+
+    #[test]
+    fn match_daddr_v6_uses_offset_24() {
+        let addr: Ipv6Addr = "fd00::1".parse().unwrap();
+        let rule = Rule::new("filter", "output").match_daddr_v6(addr, 128);
+        let payloads = payload_exprs(&rule);
+        assert_eq!(payloads, vec![(PayloadBase::Network, 24, 16)]);
+    }
+
+    #[test]
+    fn match_saddr_v6_not_flips_op_to_neq() {
+        let addr: Ipv6Addr = "2001:db8::1".parse().unwrap();
+        let rule = Rule::new("filter", "input").match_saddr_v6_not(addr, 128);
+        let cmps = cmp_exprs(&rule);
+        assert_eq!(cmps.len(), 1);
+        assert_eq!(cmps[0].0, CmpOp::Neq);
+    }
+
+    #[test]
+    fn match_daddr_v6_not_uses_offset_24_and_neq() {
+        let addr: Ipv6Addr = "2001:db8::abcd".parse().unwrap();
+        let rule = Rule::new("filter", "output").match_daddr_v6_not(addr, 64);
+        let payloads = payload_exprs(&rule);
+        let cmps = cmp_exprs(&rule);
+        assert_eq!(payloads, vec![(PayloadBase::Network, 24, 16)]);
+        assert_eq!(cmps.len(), 1);
+        assert_eq!(cmps[0].0, CmpOp::Neq);
+    }
+
+    #[test]
+    fn prefix_to_mask_boundaries() {
+        // v4 widths
+        assert_eq!(prefix_to_mask(4, 0), vec![0u8; 4]);
+        assert_eq!(prefix_to_mask(4, 32), vec![0xff; 4]);
+        assert_eq!(prefix_to_mask(4, 24), vec![0xff, 0xff, 0xff, 0x00]);
+        // v6 widths
+        assert_eq!(prefix_to_mask(16, 0), vec![0u8; 16]);
+        assert_eq!(prefix_to_mask(16, 128), vec![0xff; 16]);
+        let mut sixty_four = vec![0u8; 16];
+        for byte in sixty_four.iter_mut().take(8) {
+            *byte = 0xff;
+        }
+        assert_eq!(prefix_to_mask(16, 64), sixty_four);
+        // Cross-byte boundary: /68 → 8 bytes 0xff, then 0xf0, then 7 zeros.
+        let mut sixty_eight = vec![0u8; 16];
+        for byte in sixty_eight.iter_mut().take(8) {
+            *byte = 0xff;
+        }
+        sixty_eight[8] = 0xf0;
+        assert_eq!(prefix_to_mask(16, 68), sixty_eight);
+        // Clamp: out-of-range prefix saturates to all-ones.
+        assert_eq!(prefix_to_mask(16, 200), vec![0xff; 16]);
     }
 }

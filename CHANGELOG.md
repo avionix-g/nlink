@@ -4,6 +4,19 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+
+- **`Rule::match_saddr_v6` / `match_daddr_v6` / `match_saddr_v6_not`
+  / `match_daddr_v6_not`** on the nftables rule builder, alongside
+  the existing v4 helpers. Same `(addr, prefix)` signature; `/128`
+  uses the exact-match fast-path (no bitwise mask), shorter
+  prefixes emit `Payload + Bitwise + Cmp` with the masked
+  address. Unblocks single-stack IPv6 nftables rule construction.
+  New helper `prefix_to_mask_v6` mirrors the existing
+  `prefix_to_mask_v4`. Inline unit tests cover the exact-match
+  path, prefix path, destination offset (24 vs 8), `_not`
+  variants, and the prefix-to-mask byte-boundary case.
+
 ### Fixed
 
 - **`Neighbor::write_delete` now propagates `ndm_flags`** so the
