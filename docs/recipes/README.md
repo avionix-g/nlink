@@ -61,6 +61,11 @@ to the hand-rolled netlink primitives if you want to go deeper.
 
 ### Cross-cutting
 
+- [**Events with ENOBUFS resync**](events-with-resync.md) — keep
+  state correct across multicast overflows. Uses `ResyncedEvent<T>`
+  + `ResyncMarker` (Plan 151, 0.16+); pairs with the connection
+  pool below for the dump connection.
+
 - [**Connection pool**](connection-pool.md) — hold a bounded set
   of `Connection<P>` and round-robin requests across tasks.
   Right answer when you'd otherwise hand-roll multiple

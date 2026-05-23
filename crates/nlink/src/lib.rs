@@ -240,3 +240,7 @@ pub use netlink::neigh::NeighborConfig;
 // Connection pool (Plan 159) — bounded mpsc-channel-backed pool
 // for high-fanout consumers.
 pub use netlink::pool::{ConnectionPool, ConnectionPoolBuilder, PooledConnection};
+
+// ENOBUFS resync helper types (Plan 151) — sum type yielded by a
+// resync-aware event consumer, plus boundary markers.
+pub use netlink::resync::{ResyncMarker, ResyncedEvent};

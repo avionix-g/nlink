@@ -6,6 +6,20 @@ All notable changes to this project will be documented in this file.
 
 ### Added
 
+- **ENOBUFS resync types** — `ResyncedEvent<T>` sum type
+  (`Event(T)` / `Resynced(T)` / `Marker(...)`) + `ResyncMarker`
+  (`ResyncStart` / `ResyncEnd`) for consumers that want to handle
+  multicast-overflow recovery explicitly. The canonical loop
+  pattern (poll events, on `is_no_buffer_space()` invalidate
+  local state + redump via a separate dump connection + resume)
+  is documented in `docs/recipes/events-with-resync.md`. Pairs
+  naturally with the connection pool from Plan 159 for the dump
+  connection. The pre-baked Stream wrapper that drives this
+  state machine internally (Plan 151 §4.2) is a follow-up — the
+  design needs more soak before locking in. Re-exported at the
+  crate root: `nlink::{ResyncMarker, ResyncedEvent}`. See
+  Plan 151.
+
 - **nftables flowtable support** — `Connection::<Nftables>::add_flowtable`,
   `del_flowtable`, `list_flowtables`. New `Flowtable` builder
   (`Flowtable::new(family, table, name).device(d).priority(p).hw_offload(true).counter(true)`).
