@@ -2,6 +2,7 @@
 resolver = "2"
 members = [
     "crates/nlink",
+    "crates/nlink-macros",
     "bins/ip",
     "bins/tc",
     "bins/ss",
@@ -67,5 +68,9 @@ proc-macro2 = "1"
 quote = "1"
 syn = { version = "2", features = ["full", "extra-traits"] }
 
+# trybuild — proc-macro test harness for compile-pass / compile-fail
+trybuild = "1"
+
 # Workspace crates
 nlink = { path = "crates/nlink" }
+nlink-macros = { path = "crates/nlink-macros" }
