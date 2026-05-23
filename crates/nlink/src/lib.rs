@@ -244,3 +244,15 @@ pub use netlink::pool::{ConnectionPool, ConnectionPoolBuilder, PooledConnection}
 // ENOBUFS resync helper types (Plan 151) — sum type yielded by a
 // resync-aware event consumer, plus boundary markers.
 pub use netlink::resync::{ResyncMarker, ResyncedEvent};
+
+// Streaming dump API (Plan 149) — yield typed netlink dump
+// messages one at a time.
+pub use netlink::dump_stream::DumpStream;
+
+// nftables flowtable (Plan 150) — flow-table fast path for the
+// netfilter conntrack-cached forwarding bypass.
+pub use netlink::nftables::Flowtable;
+
+// XFRM IPsec hardware offload (Plan 153.1) — request kernel push
+// SA crypto/packet path onto NIC hardware.
+pub use netlink::xfrm::{XfrmOffloadFlag, XfrmUserOffload};

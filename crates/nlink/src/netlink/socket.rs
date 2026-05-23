@@ -439,6 +439,32 @@ impl BatchBufs {
 
 #[cfg(feature = "syscall_batch")]
 impl NetlinkSocket {
+    /// Poll-based batched recv for `Stream` implementations
+    /// (`DumpStream`, multicast event streams). Same semantics as
+    /// [`Self::recv_batch`] but exposes the batch via the
+    /// `Poll<Result<Vec<Vec<u8>>>>` shape.
+    pub fn poll_recv_batch(
+        &self,
+        cx: &mut Context<'_>,
+        max: usize,
+    ) -> Poll<Result<Vec<Vec<u8>>>> {
+        let max = max.clamp(1, NL_BATCH_SIZE);
+        loop {
+            let mut guard = match self.fd.poll_read_ready(cx) {
+                Poll::Ready(Ok(guard)) => guard,
+                Poll::Ready(Err(e)) => return Poll::Ready(Err(e.into())),
+                Poll::Pending => return Poll::Pending,
+            };
+            let result: std::result::Result<std::io::Result<Vec<Vec<u8>>>, _> =
+                guard.try_io(|inner| Self::recv_batch_inner(inner.get_ref().as_raw_fd(), max));
+            match result {
+                Ok(Ok(frames)) => return Poll::Ready(Ok(frames)),
+                Ok(Err(e)) => return Poll::Ready(Err(Error::Io(e))),
+                Err(_would_block) => continue,
+            }
+        }
+    }
+
     /// Receive up to `max` netlink datagrams in one `recvmmsg(2)`
     /// syscall.
     ///

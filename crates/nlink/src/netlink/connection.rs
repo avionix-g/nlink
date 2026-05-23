@@ -351,42 +351,58 @@ impl<P: ProtocolState> Connection<P> {
 
         let mut responses = Vec::new();
 
-        loop {
-            let data = self.socket.recv_msg().await?;
-            let mut done = false;
+        // Per-batch frame buffer. When the `syscall_batch` feature
+        // is on we collect up to NL_BATCH_SIZE frames per syscall
+        // via recvmmsg(2); otherwise we fall back to per-frame
+        // recv_msg. The frame-processing loop below is identical
+        // either way — it just sees a 1-frame batch vs an N-frame
+        // batch.
+        #[cfg(feature = "syscall_batch")]
+        let mut batch: Vec<Vec<u8>> = Vec::with_capacity(crate::netlink::socket::NL_BATCH_SIZE);
 
-            for result in MessageIter::new(&data) {
-                let (header, payload) = result?;
+        'outer: loop {
+            #[cfg(feature = "syscall_batch")]
+            {
+                batch.clear();
+                self.socket
+                    .recv_batch(&mut batch, crate::netlink::socket::NL_BATCH_SIZE)
+                    .await?;
+            }
+            #[cfg(not(feature = "syscall_batch"))]
+            let batch = {
+                let data = self.socket.recv_msg().await?;
+                vec![data]
+            };
 
-                // Check sequence number
-                if header.nlmsg_seq != seq {
-                    continue;
-                }
+            for data in batch.iter() {
+                for result in MessageIter::new(data) {
+                    let (header, payload) = result?;
 
-                if header.is_error() {
-                    let err = NlMsgError::from_bytes(payload)?;
-                    if !err.is_ack() {
-                        return Err(err.into_error(payload));
+                    // Check sequence number
+                    if header.nlmsg_seq != seq {
+                        continue;
+                    }
+
+                    if header.is_error() {
+                        let err = NlMsgError::from_bytes(payload)?;
+                        if !err.is_ack() {
+                            return Err(err.into_error(payload));
+                        }
+                    }
+
+                    if header.is_done() {
+                        break 'outer;
+                    }
+
+                    // Collect the full message (header + payload)
+                    let msg_len = header.nlmsg_len as usize;
+                    let msg_start = payload.as_ptr() as usize
+                        - data.as_ptr() as usize
+                        - std::mem::size_of::<NlMsgHdr>();
+                    if msg_start + msg_len <= data.len() {
+                        responses.push(data[msg_start..msg_start + msg_len].to_vec());
                     }
                 }
-
-                if header.is_done() {
-                    done = true;
-                    break;
-                }
-
-                // Collect the full message (header + payload)
-                let msg_len = header.nlmsg_len as usize;
-                let msg_start = payload.as_ptr() as usize
-                    - data.as_ptr() as usize
-                    - std::mem::size_of::<NlMsgHdr>();
-                if msg_start + msg_len <= data.len() {
-                    responses.push(data[msg_start..msg_start + msg_len].to_vec());
-                }
-            }
-
-            if done {
-                break;
             }
         }
 

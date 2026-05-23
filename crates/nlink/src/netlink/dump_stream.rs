@@ -48,7 +48,7 @@ use super::{
     builder::MessageBuilder,
     connection::Connection,
     error::Result,
-    message::{MessageIter, NLM_F_DUMP, NLM_F_REQUEST, NLMSG_HDRLEN, NlMsgError, NlMsgHdr},
+    message::{MessageIter, NLM_F_DUMP, NLM_F_REQUEST, NlMsgError},
     parse::FromNetlink,
     protocol::ProtocolState,
 };
@@ -158,13 +158,11 @@ impl<'a, P: ProtocolState, T: FromNetlink + Unpin> DumpStream<'a, P, T> {
             // parse step. Malformed frames push Err(...) but
             // don't terminate the stream — kernel sometimes
             // ships partially-parseable frames during long dumps.
+            let _ = header; // header is used above for seq/error/done checks
             match T::from_bytes(payload) {
                 Ok(item) => self.pending.push_back(Ok(item)),
                 Err(e) => self.pending.push_back(Err(e)),
             }
-            let _ = header; // header.nlmsg_len already consumed via MessageIter
-            let _ = NLMSG_HDRLEN; // size_of NlMsgHdr; unused here since MessageIter handles framing
-            let _ = std::mem::size_of::<NlMsgHdr>();
         }
     }
 }
@@ -185,25 +183,57 @@ impl<P: ProtocolState, T: FromNetlink + Unpin> Stream for DumpStream<'_, P, T> {
 
         // Drain socket batches until we have a parsed message to
         // yield, or until the socket goes pending.
+        //
+        // With `syscall_batch` on, one poll_recv_batch returns up
+        // to NL_BATCH_SIZE frames in one syscall — drain each into
+        // pending and continue. Without the feature, poll_recv
+        // gives us one frame per call; drain that and loop.
         loop {
-            match this.conn.socket().poll_recv(cx) {
-                Poll::Ready(Ok(data)) => {
-                    this.drain_into_pending(&data);
-                    if let Some(item) = this.pending.pop_front() {
-                        return Poll::Ready(Some(item));
+            #[cfg(feature = "syscall_batch")]
+            {
+                match this
+                    .conn
+                    .socket()
+                    .poll_recv_batch(cx, crate::netlink::socket::NL_BATCH_SIZE)
+                {
+                    Poll::Ready(Ok(frames)) => {
+                        for data in &frames {
+                            this.drain_into_pending(data);
+                        }
+                        if let Some(item) = this.pending.pop_front() {
+                            return Poll::Ready(Some(item));
+                        }
+                        if this.done || this.errored {
+                            return Poll::Ready(None);
+                        }
+                        continue;
                     }
-                    if this.done || this.errored {
-                        return Poll::Ready(None);
+                    Poll::Ready(Err(e)) => {
+                        this.errored = true;
+                        return Poll::Ready(Some(Err(e)));
                     }
-                    // Empty batch (e.g. all frames were for a
-                    // different seq); loop to read more.
-                    continue;
+                    Poll::Pending => return Poll::Pending,
                 }
-                Poll::Ready(Err(e)) => {
-                    this.errored = true;
-                    return Poll::Ready(Some(Err(e)));
+            }
+            #[cfg(not(feature = "syscall_batch"))]
+            {
+                match this.conn.socket().poll_recv(cx) {
+                    Poll::Ready(Ok(data)) => {
+                        this.drain_into_pending(&data);
+                        if let Some(item) = this.pending.pop_front() {
+                            return Poll::Ready(Some(item));
+                        }
+                        if this.done || this.errored {
+                            return Poll::Ready(None);
+                        }
+                        continue;
+                    }
+                    Poll::Ready(Err(e)) => {
+                        this.errored = true;
+                        return Poll::Ready(Some(Err(e)));
+                    }
+                    Poll::Pending => return Poll::Pending,
                 }
-                Poll::Pending => return Poll::Pending,
             }
         }
     }
@@ -270,6 +300,7 @@ impl<P: ProtocolState> Connection<P> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::netlink::message::NLMSG_HDRLEN;
 
     // Verify DumpStream's send/done state machine via a tiny synth
     // test exercising drain_into_pending directly. (Full
