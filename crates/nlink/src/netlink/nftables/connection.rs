@@ -1029,6 +1029,82 @@ impl Transaction {
         self
     }
 
+    /// Add a chain deletion to the batch. Mirrors the imperative
+    /// [`Connection::<Nftables>::del_chain`](Connection) shape.
+    pub fn del_chain(mut self, table: &str, name: &str, family: Family) -> Self {
+        let mut builder = MessageBuilder::new(nft_msg_type(NFT_MSG_DELCHAIN), NLM_F_REQUEST);
+        let nfgenmsg = NfGenMsg::new(family);
+        builder.append(&nfgenmsg);
+        builder.append_attr_str(NFTA_CHAIN_TABLE, table);
+        builder.append_attr_str(NFTA_CHAIN_NAME, name);
+        builder.set_seq(self.next_seq());
+        self.messages.push(builder.finish());
+        self
+    }
+
+    /// Add a rule deletion to the batch (by kernel handle).
+    /// Mirrors the imperative
+    /// [`Connection::<Nftables>::del_rule`](Connection).
+    pub fn del_rule(mut self, table: &str, chain: &str, family: Family, handle: u64) -> Self {
+        let mut builder = MessageBuilder::new(nft_msg_type(NFT_MSG_DELRULE), NLM_F_REQUEST);
+        let nfgenmsg = NfGenMsg::new(family);
+        builder.append(&nfgenmsg);
+        builder.append_attr_str(NFTA_RULE_TABLE, table);
+        builder.append_attr_str(NFTA_RULE_CHAIN, chain);
+        builder.append_attr_u64_be(NFTA_RULE_HANDLE, handle);
+        builder.set_seq(self.next_seq());
+        self.messages.push(builder.finish());
+        self
+    }
+
+    /// Add a flowtable creation to the batch. Mirrors the
+    /// imperative [`Connection::<Nftables>::add_flowtable`](Connection).
+    pub fn add_flowtable(mut self, ft: &super::types::Flowtable) -> Self {
+        let mut builder = MessageBuilder::new(
+            nft_msg_type(NFT_MSG_NEWFLOWTABLE),
+            NLM_F_REQUEST | NLM_F_CREATE | NLM_F_EXCL,
+        );
+        let nfgenmsg = NfGenMsg::new(ft.family);
+        builder.append(&nfgenmsg);
+        builder.append_attr_str(NFTA_FLOWTABLE_TABLE, &ft.table);
+        builder.append_attr_str(NFTA_FLOWTABLE_NAME, &ft.name);
+
+        let hook = builder.nest_start(NFTA_FLOWTABLE_HOOK | 0x8000);
+        builder.append_attr_u32_be(NFTA_FLOWTABLE_HOOK_NUM, NF_NETDEV_INGRESS);
+        builder.append_attr_u32_be(NFTA_FLOWTABLE_HOOK_PRIORITY, ft.priority as u32);
+        if !ft.devs.is_empty() {
+            let devs = builder.nest_start(NFTA_FLOWTABLE_HOOK_DEVS | 0x8000);
+            for dev in &ft.devs {
+                let dev_nest = builder.nest_start(1u16 | 0x8000); // NFTA_LIST_ELEM
+                builder.append_attr_str(NFTA_DEVICE_NAME, dev);
+                builder.nest_end(dev_nest);
+            }
+            builder.nest_end(devs);
+        }
+        builder.nest_end(hook);
+
+        if ft.flags != 0 {
+            builder.append_attr_u32_be(NFTA_FLOWTABLE_FLAGS, ft.flags);
+        }
+
+        builder.set_seq(self.next_seq());
+        self.messages.push(builder.finish());
+        self
+    }
+
+    /// Add a flowtable deletion to the batch. Mirrors the
+    /// imperative [`Connection::<Nftables>::del_flowtable`](Connection).
+    pub fn del_flowtable(mut self, family: Family, table: &str, name: &str) -> Self {
+        let mut builder = MessageBuilder::new(nft_msg_type(NFT_MSG_DELFLOWTABLE), NLM_F_REQUEST);
+        let nfgenmsg = NfGenMsg::new(family);
+        builder.append(&nfgenmsg);
+        builder.append_attr_str(NFTA_FLOWTABLE_TABLE, table);
+        builder.append_attr_str(NFTA_FLOWTABLE_NAME, name);
+        builder.set_seq(self.next_seq());
+        self.messages.push(builder.finish());
+        self
+    }
+
     /// Commit the transaction atomically.
     #[tracing::instrument(level = "debug", skip_all, fields(method = "commit"))]
     pub async fn commit(self, conn: &Connection<Nftables>) -> Result<()> {
