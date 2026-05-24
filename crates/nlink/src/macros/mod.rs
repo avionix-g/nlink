@@ -29,13 +29,17 @@
 //! | 1 | Crate scaffold + `#[derive(GenlCommand)]` | ✓ |
 //! | 2 | `#[derive(GenlAttribute)]` + `#[derive(GenlEnum)]` | ✓ |
 //! | 3a | `nlink::macros` substrate (this module) | ✓ |
-//! | 3b | `#[derive(GenlMessage)]` + `#[derive(NetlinkAttrs)]` | — |
-//! | 4 | `#[genl_family(...)]` attribute macro | — |
-//! | 5 | `Connection::<F>::send_typed<M, R>` + `dump_typed_stream` | — |
+//! | 3b | `#[derive(GenlMessage)]` (NetlinkAttrs deferred) | ✓ |
+//! | 4 | `#[genl_family(...)]` attribute macro | ✓ |
+//! | 5 | `Connection::<F>::send_typed<M, R>` + `dump_typed_stream` | ✓ |
 //! | 6 | Worked example + recipe | — |
 //! | 7 | Final re-export polish + CHANGELOG framing | — |
 
 pub use nlink_macros::{genl_family, GenlAttribute, GenlCommand, GenlEnum, GenlMessage};
+
+mod genl_dispatch;
+
+pub use genl_dispatch::GenlTypedDumpStream;
 
 use crate::netlink::MessageBuilder;
 use crate::Result;
@@ -70,6 +74,51 @@ pub trait GenlMessage: Sized {
     /// Parse the message body from an attribute payload (i.e. the
     /// bytes after the GENL header).
     fn from_bytes(payload: &[u8]) -> Result<Self>;
+}
+
+/// Connection-facing trait for a Generic Netlink family marker.
+///
+/// Implemented automatically by [`macro@genl_family`]. Carries
+/// the runtime-resolved kernel family ID + the compile-time
+/// version constant the GENL header needs on every outbound
+/// message. This is what
+/// [`Connection::<F>::send_typed`](crate::netlink::Connection) +
+/// [`dump_typed_stream`](crate::netlink::Connection)
+/// (Plan 154 Phase 5) bound their generic dispatch on.
+///
+/// # Hand-implementation
+///
+/// Hand-implementing this trait is supported for the rare case
+/// where the macro doesn't fit (e.g. a family marker that needs
+/// extra fields beyond `family_id`). Match the shape:
+///
+/// ```ignore
+/// pub struct MyFamily { family_id: u16, extra: SomeCache }
+/// impl GenlFamily for MyFamily {
+///     const VERSION: u8 = 1;
+///     const NAME: &'static str = "my_family";
+///     fn family_id(&self) -> u16 { self.family_id }
+/// }
+/// ```
+///
+/// Family ID resolution still goes through
+/// [`AsyncProtocolInit`](crate::netlink::AsyncProtocolInit); the
+/// `GenlFamily` trait is the *send-time* contract, not the
+/// construction-time one.
+pub trait GenlFamily {
+    /// Family version (the GENL header's `version` field).
+    /// Compile-time constant per Generic Netlink convention.
+    const VERSION: u8;
+
+    /// Family name (the kernel-side string registered via
+    /// `CTRL_CMD_NEWFAMILY`). Compile-time constant; mirrors
+    /// the `NAME` const that `#[genl_family]` already emits as an
+    /// inherent associated constant on the marker struct.
+    const NAME: &'static str;
+
+    /// Kernel-assigned family ID, resolved at connection
+    /// construction time and stored on the marker.
+    fn family_id(&self) -> u16;
 }
 
 /// A nested-attribute group — a payload struct that doesn't carry

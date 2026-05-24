@@ -6,6 +6,40 @@ All notable changes to this project will be documented in this file.
 
 ### Added
 
+- **`Connection::<F: GenlFamily>::send_typed<M, R>`** +
+  **`dump_typed_stream<M, R>`** (Plan 154 Phase 5) — the generic
+  send-side dispatch that closes the Plan 154 loop: with
+  `#[genl_family(...)]` + `#[derive(GenlMessage)]`, downstream
+  code now writes one fully-typed round-trip in a single line:
+
+  ```rust
+  let reply: GetReply = conn.send_typed(GetRequest { id: 0 }).await?;
+  ```
+
+  - `send_typed` is the single-request / single-response shape
+    (`NLM_F_REQUEST | NLM_F_ACK`). Missing attributes leave the
+    response fields at their `Default` values — matches the
+    `#[derive(GenlMessage)]` `from_bytes` semantics.
+  - `dump_typed_stream` returns a
+    `GenlTypedDumpStream<'_, F, R>` that implements
+    [`tokio_stream::Stream<Item = Result<R>>`], mirroring the
+    byte-level [`DumpStream`](crate::netlink::dump_stream::DumpStream)
+    state machine with a per-frame
+    `R::from_bytes(payload[GENL_HDRLEN..])` parse step. Honors
+    the `syscall_batch` feature on the recv path.
+
+  The dispatch is gated on a new public **`GenlFamily`** trait
+  (the send-time contract, distinct from the construction-time
+  `AsyncProtocolInit`) that `#[genl_family(...)]` now emits
+  automatically alongside the existing trait impls. Hand-written
+  families can implement `GenlFamily` directly when the macro
+  doesn't fit — see the trait's docstring for the shape.
+
+  6 new tests cover `parse_first_genl_reply` against synthetic
+  frames (typed reply, NLMSG_DONE, pure ACK, ACK-then-reply,
+  kernel-error propagation) and the on-wire header layout that
+  `build_genl_request` emits.
+
 - **`#[genl_family(name = "...", version = N)]`** attribute macro
   (Plan 154 Phase 4) — rewrites a unit-struct declaration into a
   complete GENL family marker type with all four trait impls

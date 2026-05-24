@@ -155,5 +155,10 @@ pub use protocol::{
 #[doc(hidden)]
 pub use protocol::__macro_seal;
 pub use socket::{NetlinkSocket, Protocol, rtnetlink_groups};
+// Internal-use re-export so callers outside `netlink/` (e.g.
+// `crate::macros::genl_dispatch`) can reach the batch-size const
+// without naming the private `socket` module directly.
+#[cfg(feature = "syscall_batch")]
+pub(crate) use socket::NL_BATCH_SIZE;
 pub use stream::{EventSource, EventSubscription, OwnedEventStream};
 pub use tc_options::NetemParameter;

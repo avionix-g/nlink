@@ -118,6 +118,18 @@ pub(crate) fn expand(
         impl ::nlink::netlink::__macro_seal::AsyncConstructibleSeal
             for #struct_ident #ty_generics #where_clause
         {}
+
+        impl #impl_generics ::nlink::macros::GenlFamily
+            for #struct_ident #ty_generics #where_clause
+        {
+            const VERSION: u8 = #version;
+            const NAME: &'static str = #family_name;
+
+            #[inline]
+            fn family_id(&self) -> u16 {
+                self.family_id
+            }
+        }
     })
 }
 
