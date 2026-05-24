@@ -379,6 +379,18 @@ impair,lab,namespace,nftables,ratelimit,route,selinux,sockdiag,
 uevent,xfrm}/`. Read these directly when learning a subsystem;
 they are kept current.
 
+**Convention — every example .rs MUST be registered in
+`crates/nlink/Cargo.toml`.** Cargo only auto-discovers examples
+at the top level of `examples/`; any file in a subdirectory
+(`examples/route/foo.rs`, `examples/genl/bar.rs`, …) is invisible
+to `cargo build --workspace --all-targets` unless declared as an
+`[[example]] name=… path=…` block. Skipping the registration means
+the example bit-rots silently against API changes — surfaced by
+[Plan 160](plans/160-example-registry-audit.md) which catalogues
+9 such orphans found during the 0.16 cycle. `scripts/audit-
+example-registration.sh` enforces the convention; run it locally
+before merging a new example.
+
 ## Active work
 
 The **0.16 cycle is mid-flight** on the `0.16` branch (do not push
