@@ -6,6 +6,44 @@ All notable changes to this project will be documented in this file.
 
 ### Added
 
+- **`#[genl_family(name = "...", version = N)]`** attribute macro
+  (Plan 154 Phase 4) — rewrites a unit-struct declaration into a
+  complete GENL family marker type with all four trait impls
+  (`ProtocolState` + `AsyncProtocolInit` + the sealed-trait pair
+  `__macro_seal::ProtocolStateSeal` +
+  `__macro_seal::AsyncConstructibleSeal`) plus the `family_id`
+  field, the `NAME`/`VERSION` const accessors, and the
+  `family_id()` getter.
+
+  ```rust
+  use nlink::macros::genl_family;
+
+  #[genl_family(name = "my_family", version = 1)]
+  pub struct MyFamily;
+
+  // Now usable as any in-tree GENL family marker:
+  let conn = Connection::<MyFamily>::new_async().await?;
+  ```
+
+  The `AsyncProtocolInit::resolve_async` impl calls a new
+  `nlink::macros::__rt::resolve_genl_family(socket, name)`
+  helper (matches the body of the existing per-family
+  `resolve_wireguard_family` / `resolve_macsec_family` / etc.
+  helpers, parametrized on family name — a future cleanup pass
+  can rewire those copies through this resolver to eliminate the
+  duplication). The sealed-trait impls go through new
+  `nlink::netlink::__macro_seal` re-exports — `#[doc(hidden)]`
+  paths the macro is the only authorized emitter of; downstream
+  code should not name them directly.
+
+  6 new tests: `NAME`/`VERSION` const generation, default
+  construction with `family_id = 0`, `Debug` impl format,
+  `ProtocolState::PROTOCOL == Protocol::Generic` compile-time
+  check, `AsyncConstructible` + `AsyncProtocolInit` trait-bound
+  satisfaction (proves a macro-defined family plugs into
+  `Connection::<F>::new_async()` exactly like the in-tree
+  hand-written ones), and two macro-defined families coexisting.
+
 - **`#[derive(GenlMessage)]`** (Plan 154 Phase 3b) — the big
   derive that turns a struct annotation into a complete
   `GenlMessage` impl. Pairs with the typed-enum codec derives to

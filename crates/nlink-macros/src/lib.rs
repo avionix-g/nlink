@@ -31,9 +31,14 @@ use proc_macro::TokenStream;
 use proc_macro2::Span;
 use syn::{parse_macro_input, Data, DeriveInput, Expr, ExprLit, Lit, LitStr, Meta};
 
+// Re-export the syn `ItemStruct` shape used by the
+// `#[genl_family]` attribute macro to consume its input.
+pub(crate) use syn::ItemStruct;
+
 mod codec;
 mod genl_attribute;
 mod genl_command;
+mod genl_family;
 mod genl_enum;
 mod genl_message;
 
@@ -230,6 +235,62 @@ pub fn derive_genl_enum(input: TokenStream) -> TokenStream {
 pub fn derive_genl_message(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
     genl_message::expand(input)
+        .unwrap_or_else(|e| e.to_compile_error())
+        .into()
+}
+
+/// Declare a Generic Netlink family marker.
+///
+/// Rewrites a unit-struct declaration into a complete family
+/// marker type with all the trait impls (`ProtocolState`,
+/// `AsyncProtocolInit`, `__macro_seal::ProtocolStateSeal`,
+/// `__macro_seal::AsyncConstructibleSeal`) the rest of nlink
+/// needs to plug the marker into the existing
+/// `Connection::<P>::new_async()` machinery.
+///
+/// # Arguments
+///
+/// - `name = "..."` — the family name registered with the
+///   kernel (matches the `nl80211`, `dpll`, `wireguard` strings).
+/// - `version = N` — the GENL family version (kernel UAPI;
+///   typically `1`).
+///
+/// # Example
+///
+/// ```ignore
+/// use nlink::macros::genl_family;
+///
+/// #[genl_family(name = "my_family", version = 1)]
+/// pub struct MyFamily;
+///
+/// // Expands to a struct with a `family_id: u16` field +
+/// // `MyFamily::NAME` + `MyFamily::VERSION` constants +
+/// // ProtocolState / AsyncProtocolInit / AsyncConstructible
+/// // impls. Use as the protocol marker:
+/// //
+/// // let conn = Connection::<MyFamily>::new_async().await?;
+/// ```
+///
+/// # Requirements
+///
+/// - The annotated struct must be a unit struct (`pub struct
+///   MyFamily;`). The macro rewrites it to add the `family_id`
+///   field; pre-declared fields would conflict.
+/// - The struct must not be generic.
+///
+/// # Sealed-trait impl detail
+///
+/// The macro emits `impl
+/// nlink::netlink::protocol::__macro_seal::ProtocolStateSeal`
+/// (which is the private `Sealed` trait re-exported under a
+/// `#[doc(hidden)]` path for this macro's use). This satisfies
+/// the in-tree sealed-trait contract that prevents arbitrary
+/// types from claiming `ProtocolState`; using
+/// `#[genl_family]` is the only path the contract authorizes.
+#[proc_macro_attribute]
+pub fn genl_family(args: TokenStream, item: TokenStream) -> TokenStream {
+    let item = parse_macro_input!(item as ItemStruct);
+    genl_family::expand(args.into(), item)
         .unwrap_or_else(|e| e.to_compile_error())
         .into()
 }

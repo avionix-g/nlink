@@ -147,6 +147,13 @@ pub use protocol::{
     Macsec, Mptcp, Netfilter, Nftables, Nl80211, ProtocolState, Route, SELinux, SockDiag,
     Wireguard, Xfrm, construction,
 };
+// Macro-only re-export of the sealed-trait module; downstream
+// code should NOT name these paths directly. See
+// `protocol::__macro_seal` for the contract — only the
+// `#[genl_family]` attribute macro is authorized to emit
+// `impl __macro_seal::*`.
+#[doc(hidden)]
+pub use protocol::__macro_seal;
 pub use socket::{NetlinkSocket, Protocol, rtnetlink_groups};
 pub use stream::{EventSource, EventSubscription, OwnedEventStream};
 pub use tc_options::NetemParameter;

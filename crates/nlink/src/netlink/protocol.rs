@@ -40,6 +40,21 @@ mod private {
     pub trait Sealed {}
 }
 
+/// Macro-only re-export of the private `Sealed` trait so the
+/// `#[genl_family]` attribute macro (`nlink_macros`) can emit
+/// the required `impl Sealed` for user-defined family marker
+/// structs.
+///
+/// **Do not implement directly.** The contract is "go through
+/// `#[genl_family]`"; opting out at this seam silently breaks the
+/// sealed-trait guarantee that downstream consumers rely on for
+/// `Connection::<P>::new_async()`'s `AsyncConstructible` bound.
+#[doc(hidden)]
+pub mod __macro_seal {
+    pub use super::construction::AsyncConstructible as AsyncConstructibleSeal;
+    pub use super::private::Sealed as ProtocolStateSeal;
+}
+
 /// Protocol state trait for typed connections.
 ///
 /// This trait is sealed and cannot be implemented outside this crate.

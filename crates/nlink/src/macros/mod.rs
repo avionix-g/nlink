@@ -35,7 +35,7 @@
 //! | 6 | Worked example + recipe | — |
 //! | 7 | Final re-export polish + CHANGELOG framing | — |
 
-pub use nlink_macros::{GenlAttribute, GenlCommand, GenlEnum, GenlMessage};
+pub use nlink_macros::{genl_family, GenlAttribute, GenlCommand, GenlEnum, GenlMessage};
 
 use crate::netlink::MessageBuilder;
 use crate::Result;
@@ -246,6 +246,100 @@ pub mod __rt {
     /// here so derived code doesn't have to know the full path.
     pub fn attr_iter(payload: &[u8]) -> AttrIter<'_> {
         AttrIter::new(payload)
+    }
+
+    // ============================================================
+    // GENL family resolution helper (Plan 154 Phase 4)
+    // ============================================================
+    //
+    // `#[genl_family(name = "...", version = N)]` emits an
+    // AsyncProtocolInit impl whose body calls
+    // `resolve_genl_family(socket, "...")` to look up the
+    // kernel-assigned family ID at connection construction.
+    //
+    // Body matches the per-family `resolve_wireguard_family` /
+    // `resolve_macsec_family` / etc. helpers in each in-tree
+    // family's connection.rs — just parametrized on name. A
+    // future cleanup pass can rewire those copies to call this
+    // resolver and eliminate the duplication.
+
+    use crate::netlink::{
+        genl::{CtrlAttr, CtrlCmd, GenlMsgHdr, GENL_HDRLEN, GENL_ID_CTRL},
+        message::{MessageIter, NlMsgError, NLM_F_ACK, NLM_F_REQUEST},
+        NetlinkSocket,
+    };
+
+    /// Resolve the kernel-assigned family ID for a Generic
+    /// Netlink family by name.
+    ///
+    /// Emits `CTRL_CMD_GETFAMILY` with the family name and parses
+    /// the response's `CTRL_ATTR_FAMILY_ID`. Returns
+    /// `Error::FamilyNotFound` if the kernel reports the family
+    /// doesn't exist (typically: required kernel module isn't
+    /// loaded, or kernel is too old for the feature).
+    ///
+    /// Emitted by `#[genl_family]`-expanded `AsyncProtocolInit::resolve_async`
+    /// impls. Downstream code shouldn't call this directly — let
+    /// the macro handle it.
+    pub async fn resolve_genl_family(
+        socket: &NetlinkSocket,
+        name: &str,
+    ) -> Result<u16> {
+        let mut builder = MessageBuilder::new(GENL_ID_CTRL, NLM_F_REQUEST | NLM_F_ACK);
+        let genl_hdr = GenlMsgHdr::new(CtrlCmd::GetFamily as u8, 1);
+        builder.append(&genl_hdr);
+        builder.append_attr_str(CtrlAttr::FamilyName as u16, name);
+
+        let seq = socket.next_seq();
+        builder.set_seq(seq);
+        builder.set_pid(socket.pid());
+
+        let msg = builder.finish();
+        socket.send(&msg).await?;
+
+        let response: Vec<u8> = socket.recv_msg().await?;
+
+        for result in MessageIter::new(&response) {
+            let (header, payload) = result?;
+
+            if header.nlmsg_seq != seq {
+                continue;
+            }
+
+            if header.is_error() {
+                let err = NlMsgError::from_bytes(payload)?;
+                if !err.is_ack() {
+                    if err.error == -libc::ENOENT {
+                        return Err(Error::FamilyNotFound {
+                            name: name.to_string(),
+                        });
+                    }
+                    return Err(err.into_error(payload));
+                }
+                continue;
+            }
+
+            if header.is_done() {
+                continue;
+            }
+
+            if payload.len() < GENL_HDRLEN {
+                return Err(Error::InvalidMessage(
+                    "GENL header too short in CTRL_CMD_GETFAMILY response".into(),
+                ));
+            }
+
+            let attrs_data = &payload[GENL_HDRLEN..];
+            for (attr_type, attr_payload) in AttrIter::new(attrs_data) {
+                if attr_type == CtrlAttr::FamilyId as u16 {
+                    return parse_u16_attr(attr_payload);
+                }
+            }
+        }
+
+        Err(Error::FamilyNotFound {
+            name: name.to_string(),
+        })
     }
 }
 
@@ -525,5 +619,77 @@ mod tests {
         // Only id is consumed; label stays default.
         assert_eq!(parsed.id, 42);
         assert_eq!(parsed.label, "");
+    }
+
+    // -- Phase 4: #[genl_family] attribute macro ---------------
+
+    use crate::macros::genl_family;
+    use crate::netlink::construction::AsyncConstructible;
+    use crate::netlink::{AsyncProtocolInit, Protocol, ProtocolState};
+
+    #[genl_family(name = "my_family", version = 1)]
+    pub struct MyFamily;
+
+    #[test]
+    fn genl_family_macro_generates_constants() {
+        assert_eq!(MyFamily::NAME, "my_family");
+        assert_eq!(MyFamily::VERSION, 1);
+    }
+
+    #[test]
+    fn genl_family_macro_default_constructs_with_zero_family_id() {
+        let f = MyFamily::default();
+        assert_eq!(f.family_id(), 0);
+    }
+
+    #[test]
+    fn genl_family_macro_implements_protocol_state() {
+        // Compile-time check: PROTOCOL is the Generic variant.
+        const _: () = {
+            assert!(matches!(MyFamily::PROTOCOL, Protocol::Generic));
+        };
+    }
+
+    /// Helper that's only valid for types implementing
+    /// AsyncConstructible — proves the macro adds the right
+    /// sealed-trait impl. If `MyFamily` didn't get the impl,
+    /// this generic function would fail to compile.
+    fn assert_async_constructible<P: AsyncConstructible>() {}
+
+    /// Same for the AsyncProtocolInit trait (the kernel-resolved
+    /// family-ID setup that runs at Connection::new_async time).
+    fn assert_async_protocol_init<P: AsyncProtocolInit>() {}
+
+    #[test]
+    fn genl_family_macro_satisfies_trait_bounds_required_by_connection() {
+        // These calls only compile if MyFamily impls both
+        // traits. They're the substantive contract of the macro:
+        // any family defined via #[genl_family] plugs into
+        // Connection::<F>::new_async() the same way the in-tree
+        // hand-written families do.
+        assert_async_constructible::<MyFamily>();
+        assert_async_protocol_init::<MyFamily>();
+    }
+
+    #[test]
+    fn genl_family_macro_provides_debug() {
+        let f = MyFamily::default();
+        let s = format!("{f:?}");
+        assert!(s.contains("MyFamily"));
+        assert!(s.contains("my_family"));
+        assert!(s.contains("version"));
+        assert!(s.contains("family_id"));
+    }
+
+    // Second family declaration to verify the macro is reusable
+    // (a hand-written family + a macro-defined one can coexist).
+    #[genl_family(name = "second_family", version = 2)]
+    pub struct SecondFamily;
+
+    #[test]
+    fn two_macro_defined_families_coexist() {
+        assert_eq!(SecondFamily::NAME, "second_family");
+        assert_eq!(SecondFamily::VERSION, 2);
+        assert_async_constructible::<SecondFamily>();
     }
 }
