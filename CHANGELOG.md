@@ -6,6 +6,80 @@ All notable changes to this project will be documented in this file.
 
 ### Added
 
+- **DPLL multicast monitor + shared GENL group-resolution infra**
+  (Plan 156 Phase 5 — closes Plan 156). The `Connection<Dpll>`
+  API now exposes a typed push-based event stream:
+
+  ```rust
+  use nlink::netlink::{Connection, genl::dpll::{Dpll, DpllEvent}};
+  use tokio_stream::StreamExt;
+
+  let mut conn = Connection::<Dpll>::new_async().await?;
+  conn.subscribe_monitor()?;            // resolves "monitor" group → kernel ID
+  let mut events = conn.events();
+  while let Some(evt) = events.next().await {
+      match evt? {
+          DpllEvent::DeviceChanged(dev) => println!("device {} → {:?}", dev.id, dev.lock_status),
+          DpllEvent::PinChanged(pin)    => println!("pin {} → {:?}", pin.id, pin.state),
+          DpllEvent::DeviceDeleted { id } | DpllEvent::PinDeleted { id } => {
+              println!("removed: {id}");
+          }
+          _ => {}
+      }
+  }
+  ```
+
+  Sub-millisecond latency on lock-status changes — supersedes the
+  2-second polling pattern previously documented in the recipe
+  (the polling shape stays valid for cross-kernel-version
+  compatibility).
+
+  ### Shared infrastructure
+
+  The work needed new infra that's reusable by every GENL family:
+
+  - **`__rt::resolve_genl_family_with_groups(socket, name)`** —
+    extends the existing family resolver to also parse
+    `CTRL_ATTR_MCAST_GROUPS` from the `CTRL_CMD_GETFAMILY`
+    response, returning `(family_id, HashMap<String, u32>)`. One
+    additional kernel round-trip — none. The old
+    `resolve_genl_family` (id-only) is kept for back-compat.
+  - **`GenlFamily::mcast_group(name) -> Option<u32>`** new trait
+    method (default-impl returns `None`) — hand-written families
+    that don't carry a group map keep working unchanged.
+  - **`#[genl_family]` macro** now emits a `mcast_groups: HashMap<String, u32>`
+    field on every macro-generated marker struct + populates it
+    at construction time + overrides `mcast_group()` with a real
+    HashMap lookup.
+  - **`Connection<F: GenlFamily>::subscribe_group(name)`** generic
+    helper — looks up the named group via the family marker and
+    calls `socket.add_membership(...)`. Returns
+    `Error::FamilyNotFound { name: "<family>::<group>" }` when
+    the kernel doesn't ship the group.
+  - **`Connection<Dpll>::subscribe_monitor()`** family-specific
+    convenience wrapping `subscribe_group("monitor")`.
+  - **`DpllEvent`** enum (6 variants: device/pin × create/delete/change)
+    + parser dispatching on the GENL `cmd` byte.
+  - **`impl EventSource for Dpll`** wires `Connection::events()` /
+    `into_events()` to yield `DpllEvent` items (matches the existing
+    Netfilter/SELinux/Devlink/Nl80211/Ethtool pattern).
+
+  5 new unit tests cover device-change parsing, device-delete
+  ID-only extraction, pin-change parsing, non-notification command
+  rejection, and truncated-payload rejection. 880 lib tests pass
+  (was 875 + 5). Clippy clean across `--all-features`.
+
+  ### Follow-up: refactor existing families to use the shared
+  infra
+
+  Devlink, Nl80211, and Ethtool currently hand-roll their own
+  per-family multicast-group resolution in their
+  `resolve_*_family()` helpers (each ~100 lines of duplicated
+  CTRL_ATTR_MCAST_GROUPS-parsing code). The new shared resolver
+  makes those redundant — a follow-up commit can drop the
+  per-family copies and route them through `GenlFamily::mcast_group`.
+  Net code reduction across 3 families.
+
 - **DPLL Generic Netlink family** (Plan 156, Phases 1-4 + 6
   partial) — the kernel's clock-synchronization family (SyncE,
   PTP, GNSS-disciplined oscillators) is now a first-class

@@ -89,6 +89,50 @@ where
     /// # Ok(())
     /// # }
     /// ```
+    /// Subscribe to a named multicast group exposed by this
+    /// family.
+    ///
+    /// Looks up the group ID via
+    /// [`GenlFamily::mcast_group`](crate::macros::GenlFamily) (the
+    /// map was populated at construction time by
+    /// `#[genl_family]`'s `resolve_async` impl, parsing
+    /// `CTRL_ATTR_MCAST_GROUPS` out of `CTRL_CMD_GETFAMILY`).
+    /// Returns
+    /// [`Error::FamilyNotFound`](crate::Error::FamilyNotFound)
+    /// when the named group isn't registered on this kernel —
+    /// e.g., asking for `"monitor"` on a kernel too old to ship
+    /// that group, or a binary/kernel mismatch.
+    ///
+    /// Pair with the [`EventSource`][es]-driven
+    /// [`events()`](crate::netlink::Connection::events) (when the
+    /// family implements `EventSource`) to consume typed
+    /// notifications from the kernel.
+    ///
+    /// [es]: crate::netlink::EventSource
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// use nlink::netlink::{Connection, genl::dpll::Dpll};
+    /// use tokio_stream::StreamExt;
+    ///
+    /// let mut conn = Connection::<Dpll>::new_async().await?;
+    /// conn.subscribe_group("monitor")?;
+    /// let mut events = conn.events();
+    /// while let Some(evt) = events.next().await {
+    ///     println!("{:?}", evt?);
+    /// }
+    /// ```
+    pub fn subscribe_group(&mut self, name: &str) -> Result<()> {
+        let id = self.state().mcast_group(name).ok_or_else(|| {
+            crate::Error::FamilyNotFound {
+                name: ::std::format!("{}::{}", F::NAME, name),
+            }
+        })?;
+        self.socket_mut().add_membership(id)?;
+        Ok(())
+    }
+
     pub async fn send_typed<M, R>(&self, request: M) -> Result<R>
     where
         M: GenlMessage,

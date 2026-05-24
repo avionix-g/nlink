@@ -47,6 +47,11 @@ pub(crate) fn expand(
         #(#attrs)*
         #vis struct #struct_ident {
             family_id: u16,
+            /// Kernel-side multicast group name → ID map, populated
+            /// at construction time from `CTRL_ATTR_MCAST_GROUPS`.
+            /// Empty if the family registers no multicast groups.
+            /// Look up via [`Self::mcast_group`].
+            mcast_groups: ::std::collections::HashMap<::std::string::String, u32>,
         }
 
         impl #struct_ident {
@@ -55,6 +60,16 @@ pub(crate) fn expand(
             #[inline]
             pub fn family_id(&self) -> u16 {
                 self.family_id
+            }
+
+            /// Look up a multicast-group ID by name. Returns
+            /// `None` if the family doesn't expose that group
+            /// (kernel didn't register it, or the binary is
+            /// running against an older kernel that doesn't ship
+            /// that group). Plan 156 Phase 5.
+            #[inline]
+            pub fn mcast_group(&self, name: &str) -> ::core::option::Option<u32> {
+                self.mcast_groups.get(name).copied()
             }
 
             /// Family name (the kernel-side string registered via
@@ -74,7 +89,10 @@ pub(crate) fn expand(
                 // populates it. Documented contract:
                 // `Connection::<Self>::new_async().await?` is the
                 // only legal construction path for downstream use.
-                Self { family_id: 0 }
+                Self {
+                    family_id: 0,
+                    mcast_groups: ::std::collections::HashMap::new(),
+                }
             }
         }
 
@@ -84,6 +102,7 @@ pub(crate) fn expand(
                     .field("name", &Self::NAME)
                     .field("version", &Self::VERSION)
                     .field("family_id", &self.family_id)
+                    .field("mcast_groups", &self.mcast_groups)
                     .finish()
             }
         }
@@ -108,9 +127,11 @@ pub(crate) fn expand(
                 Output = ::core::result::Result<Self, ::nlink::Error>,
             > + ::core::marker::Send {
                 async move {
-                    let family_id =
-                        ::nlink::macros::__rt::resolve_genl_family(socket, #family_name).await?;
-                    ::core::result::Result::Ok(Self { family_id })
+                    let (family_id, mcast_groups) =
+                        ::nlink::macros::__rt::resolve_genl_family_with_groups(
+                            socket, #family_name,
+                        ).await?;
+                    ::core::result::Result::Ok(Self { family_id, mcast_groups })
                 }
             }
         }
@@ -128,6 +149,11 @@ pub(crate) fn expand(
             #[inline]
             fn family_id(&self) -> u16 {
                 self.family_id
+            }
+
+            #[inline]
+            fn mcast_group(&self, name: &str) -> ::core::option::Option<u32> {
+                self.mcast_groups.get(name).copied()
             }
         }
     })

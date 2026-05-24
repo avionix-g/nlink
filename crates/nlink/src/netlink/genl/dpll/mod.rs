@@ -61,9 +61,11 @@
 use crate::macros::genl_family;
 
 pub mod connection;
+pub mod events;
 pub mod messages;
 pub mod types;
 
+pub use events::DpllEvent;
 pub use messages::{
     DpllDeviceGetRequest, DpllDeviceReply, DpllDeviceSetRequest, DpllPinGetRequest,
     DpllPinParentDevice, DpllPinParentPin, DpllPinReply, DpllPinSetRequest,

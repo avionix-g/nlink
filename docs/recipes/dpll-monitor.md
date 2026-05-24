@@ -243,20 +243,69 @@ conn.set_pin_priority(pin_id, 0).await?;
 include `DpllPinCapabilities::PRIORITY_CAN_CHANGE` — check the
 pin's `capabilities` field before attempting.
 
-## Multicast monitor (Plan 156 Phase 5)
+## Multicast monitor (push-based — preferred)
 
-The polling loop above is the **portable** monitor — it works
-across every kernel, every driver, but trades latency for
-simplicity (you discover lock loss on the next tick, up to
-N seconds later).
+The kernel emits **`DPLL_CMD_*_CHANGE_NTF` notifications** on the
+`monitor` multicast group whenever a device or pin is created,
+deleted, or changes state. Subscribing gives sub-millisecond
+latency on lock changes — preferred over the polling loop above
+for control planes that need to react quickly.
 
-The kernel also emits **`DPLL_CMD_*_CHANGE_NTF` notifications**
-on the `monitor` multicast group whenever a device or pin changes.
-Subscribing to that group gives sub-millisecond latency on lock
-changes. The typed-stream wrapper is the planned Plan 156 Phase 5
-deliverable — until it lands, drop down to
-`Connection::<Generic>` + the raw multicast subscription if you
-need push semantics, or stick with the polling pattern above.
+```rust,no_run
+use nlink::netlink::{
+    genl::dpll::{Dpll, DpllEvent},
+    Connection,
+};
+use tokio_stream::StreamExt;
+
+# async fn run() -> nlink::Result<()> {
+let mut conn = Connection::<Dpll>::new_async().await?;
+conn.subscribe_monitor()?;       // resolves "monitor" group via the macro stack
+let mut events = conn.events();
+
+while let Some(evt) = events.next().await {
+    match evt? {
+        DpllEvent::DeviceChanged(dev) => {
+            tracing::info!(
+                device = dev.id,
+                lock = ?dev.lock_status,
+                "device state change",
+            );
+        }
+        DpllEvent::PinChanged(pin) => {
+            tracing::info!(
+                pin = pin.id,
+                state = ?pin.state,
+                "pin state change",
+            );
+        }
+        DpllEvent::DeviceDeleted { id } => {
+            tracing::warn!(device = id, "DPLL device removed");
+        }
+        DpllEvent::PinDeleted { id } => {
+            tracing::warn!(pin = id, "DPLL pin removed");
+        }
+        DpllEvent::DeviceCreated(dev) => {
+            tracing::info!(device = dev.id, "DPLL device appeared");
+        }
+        DpllEvent::PinCreated(pin) => {
+            tracing::info!(pin = pin.id, "DPLL pin appeared");
+        }
+    }
+}
+# Ok(())
+# }
+```
+
+`subscribe_monitor()` returns
+`Error::FamilyNotFound { name: "dpll::monitor" }` if the kernel
+doesn't register the group (kernel too old, or DPLL driver
+doesn't expose monitor). Fall back to the polling loop above in
+that case.
+
+The polling loop is still valuable for cross-kernel-version
+compatibility (works on any kernel that has CONFIG_DPLL) — pick
+push for latency, polling for portability.
 
 ## See also
 

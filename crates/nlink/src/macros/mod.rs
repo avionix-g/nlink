@@ -126,6 +126,28 @@ pub trait GenlFamily {
     /// Kernel-assigned family ID, resolved at connection
     /// construction time and stored on the marker.
     fn family_id(&self) -> u16;
+
+    /// Look up a multicast-group ID by name.
+    ///
+    /// Returns the kernel-assigned `u32` group ID for the named
+    /// group (e.g., `"monitor"` on DPLL, `"rate"` on Devlink),
+    /// or `None` if the family doesn't expose that group.
+    ///
+    /// The map is populated at construction time by the
+    /// [`AsyncProtocolInit::resolve_async`](crate::netlink::AsyncProtocolInit)
+    /// step, which parses `CTRL_ATTR_MCAST_GROUPS` out of the
+    /// `CTRL_CMD_GETFAMILY` response. Plan 156 Phase 5.
+    ///
+    /// Default impl returns `None` for families that don't carry
+    /// a group map (legacy callers using
+    /// [`__rt::resolve_genl_family`] instead of
+    /// [`__rt::resolve_genl_family_with_groups`]). The
+    /// `#[genl_family]` macro always uses the with-groups
+    /// variant, so macro-generated markers override this
+    /// method with a real lookup.
+    fn mcast_group(&self, _name: &str) -> ::core::option::Option<u32> {
+        ::core::option::Option::None
+    }
 }
 
 /// A nested-attribute group — a payload struct that doesn't carry
@@ -340,10 +362,11 @@ pub mod __rt {
     // resolver and eliminate the duplication.
 
     use crate::netlink::{
-        genl::{CtrlAttr, CtrlCmd, GenlMsgHdr, GENL_HDRLEN, GENL_ID_CTRL},
+        genl::{CtrlAttr, CtrlAttrMcastGrp, CtrlCmd, GenlMsgHdr, GENL_HDRLEN, GENL_ID_CTRL},
         message::{MessageIter, NlMsgError, NLM_F_ACK, NLM_F_REQUEST},
         NetlinkSocket,
     };
+    use std::collections::HashMap;
 
     /// Resolve the kernel-assigned family ID for a Generic
     /// Netlink family by name.
@@ -416,6 +439,117 @@ pub mod __rt {
         Err(Error::FamilyNotFound {
             name: name.to_string(),
         })
+    }
+
+    /// Resolve the kernel-assigned family ID **and** the family's
+    /// multicast group map for a Generic Netlink family by name.
+    ///
+    /// Same request as [`resolve_genl_family`] but additionally
+    /// walks the response's `CTRL_ATTR_MCAST_GROUPS` nested list,
+    /// extracting every `(name, id)` pair into a `HashMap<String, u32>`.
+    /// Families with no multicast groups return an empty map.
+    ///
+    /// Emitted by `#[genl_family]`-expanded
+    /// `AsyncProtocolInit::resolve_async` impls (Plan 156 Phase 5).
+    /// Downstream code shouldn't call this directly — let the macro
+    /// handle it. The `mcast_groups` field on the macro-generated
+    /// family marker stores the map; the
+    /// [`GenlFamily::mcast_group(name)`](crate::macros::GenlFamily)
+    /// accessor reads it.
+    pub async fn resolve_genl_family_with_groups(
+        socket: &NetlinkSocket,
+        name: &str,
+    ) -> Result<(u16, HashMap<String, u32>)> {
+        let mut builder = MessageBuilder::new(GENL_ID_CTRL, NLM_F_REQUEST | NLM_F_ACK);
+        let genl_hdr = GenlMsgHdr::new(CtrlCmd::GetFamily as u8, 1);
+        builder.append(&genl_hdr);
+        builder.append_attr_str(CtrlAttr::FamilyName as u16, name);
+
+        let seq = socket.next_seq();
+        builder.set_seq(seq);
+        builder.set_pid(socket.pid());
+
+        let msg = builder.finish();
+        socket.send(&msg).await?;
+
+        let response: Vec<u8> = socket.recv_msg().await?;
+
+        let mut family_id: Option<u16> = None;
+        let mut mcast_groups: HashMap<String, u32> = HashMap::new();
+
+        for result in MessageIter::new(&response) {
+            let (header, payload) = result?;
+
+            if header.nlmsg_seq != seq {
+                continue;
+            }
+
+            if header.is_error() {
+                let err = NlMsgError::from_bytes(payload)?;
+                if !err.is_ack() {
+                    if err.error == -libc::ENOENT {
+                        return Err(Error::FamilyNotFound {
+                            name: name.to_string(),
+                        });
+                    }
+                    return Err(err.into_error(payload));
+                }
+                continue;
+            }
+
+            if header.is_done() {
+                continue;
+            }
+
+            if payload.len() < GENL_HDRLEN {
+                return Err(Error::InvalidMessage(
+                    "GENL header too short in CTRL_CMD_GETFAMILY response".into(),
+                ));
+            }
+
+            let attrs_data = &payload[GENL_HDRLEN..];
+            for (attr_type, attr_payload) in AttrIter::new(attrs_data) {
+                if attr_type == CtrlAttr::FamilyId as u16 {
+                    family_id = Some(parse_u16_attr(attr_payload)?);
+                } else if attr_type == CtrlAttr::McastGroups as u16 {
+                    // CTRL_ATTR_MCAST_GROUPS is a nested list of
+                    // anonymous index attrs; each inner element
+                    // carries CtrlAttrMcastGrp::Name (string) +
+                    // CtrlAttrMcastGrp::Id (u32). Walk all of
+                    // them and assemble the map.
+                    for (_idx, grp_data) in AttrIter::new(attr_payload) {
+                        let mut grp_name: Option<String> = None;
+                        let mut grp_id: Option<u32> = None;
+                        for (grp_attr_type, grp_attr_payload) in AttrIter::new(grp_data) {
+                            if grp_attr_type == CtrlAttrMcastGrp::Name as u16 {
+                                grp_name = Some(
+                                    ::std::str::from_utf8(grp_attr_payload)
+                                        .unwrap_or("")
+                                        .trim_end_matches('\0')
+                                        .to_string(),
+                                );
+                            } else if grp_attr_type == CtrlAttrMcastGrp::Id as u16
+                                && grp_attr_payload.len() >= 4
+                            {
+                                grp_id = Some(u32::from_ne_bytes(
+                                    grp_attr_payload[..4].try_into().unwrap(),
+                                ));
+                            }
+                        }
+                        if let (Some(n), Some(i)) = (grp_name, grp_id) {
+                            mcast_groups.insert(n, i);
+                        }
+                    }
+                }
+            }
+        }
+
+        match family_id {
+            Some(id) => Ok((id, mcast_groups)),
+            None => Err(Error::FamilyNotFound {
+                name: name.to_string(),
+            }),
+        }
     }
 }
 

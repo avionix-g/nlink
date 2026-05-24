@@ -852,6 +852,29 @@ impl EventSource for Ethtool {
     }
 }
 
+// DPLL multicast monitor events (Plan 156 Phase 5). Uses the
+// generic GENL-family group-resolution infra in the macro
+// stack — see `Connection::<Dpll>::subscribe_monitor()` and
+// `crates/nlink/src/netlink/genl/dpll/events.rs`.
+impl private::Sealed for super::genl::dpll::Dpll {}
+
+impl EventSource for super::genl::dpll::Dpll {
+    type Event = super::genl::dpll::DpllEvent;
+
+    fn parse_events(data: &[u8]) -> Vec<Self::Event> {
+        let mut events = Vec::new();
+        for msg_result in MessageIter::new(data) {
+            let Ok((_header, payload)) = msg_result else {
+                continue;
+            };
+            if let Some(evt) = super::genl::dpll::events::parse_dpll_event(payload) {
+                events.push(evt);
+            }
+        }
+        events
+    }
+}
+
 fn parse_ethtool_events(data: &[u8]) -> Vec<super::genl::ethtool::EthtoolEvent> {
     use super::genl::{GENL_HDRLEN, GenlMsgHdr};
 
