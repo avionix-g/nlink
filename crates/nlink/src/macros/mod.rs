@@ -178,6 +178,12 @@ pub mod __rt {
     pub fn emit_u64_attr(b: &mut MessageBuilder, attr_type: u16, v: u64) {
         b.append_attr_u64(attr_type, v);
     }
+    /// Signed-int emit (kernel encodes `i32` as a 4-byte LE int —
+    /// same wire shape as `u32`, just reinterpreted on the parse
+    /// side). Used by fields like DPLL `temp_mdeg` (`Option<i32>`).
+    pub fn emit_i32_attr(b: &mut MessageBuilder, attr_type: u16, v: i32) {
+        b.append_attr_u32(attr_type, v as u32);
+    }
     pub fn emit_str_attr(b: &mut MessageBuilder, attr_type: u16, v: &str) {
         b.append_attr_str(attr_type, v);
     }
@@ -243,6 +249,20 @@ pub mod __rt {
         let mut a = [0u8; 8];
         a.copy_from_slice(&payload[..8]);
         Ok(u64::from_ne_bytes(a))
+    }
+    /// Signed-int parse — same on-wire layout as `u32`, sign-aware
+    /// reinterpretation on read (kernel emits signed ints native-endian
+    /// per its `nla_get_s32` helper).
+    pub fn parse_i32_attr(payload: &[u8]) -> Result<i32> {
+        if payload.len() < 4 {
+            return Err(Error::Truncated {
+                expected: 4,
+                actual: payload.len(),
+            });
+        }
+        Ok(i32::from_ne_bytes([
+            payload[0], payload[1], payload[2], payload[3],
+        ]))
     }
     pub fn parse_str_attr(payload: &[u8]) -> Result<String> {
         // Kernel strings are NUL-terminated; strip and decode
@@ -634,6 +654,51 @@ mod tests {
     struct DerivedBytes {
         #[genl_attr(1u16)]
         payload: Vec<u8>,
+    }
+
+    #[derive(GenlMessageDerive, Debug, Default, Clone, PartialEq, Eq)]
+    #[genl_message(cmd = 11u8)]
+    struct DerivedSigned {
+        #[genl_attr(1u16)]
+        temp_mdeg: i32,
+        #[genl_attr(2u16)]
+        delta: Option<i32>,
+    }
+
+    #[test]
+    fn derived_i32_round_trips_positive_and_negative() {
+        // Positive + Some(negative) — exercises the signed parse
+        // path on both sides of zero.
+        let original = DerivedSigned {
+            temp_mdeg: 47_500,
+            delta: Some(-12_345),
+        };
+        let mut builder = MessageBuilder::new(0, 0);
+        let body_start = builder.len();
+        original.to_bytes(&mut builder).expect("emit");
+        let parsed = DerivedSigned::from_bytes(&builder.as_bytes()[body_start..])
+            .expect("parse");
+        assert_eq!(parsed, original);
+
+        // Default (zero) + None — the from_bytes-default-seed path.
+        let parsed = DerivedSigned::from_bytes(&[]).expect("parse");
+        assert_eq!(parsed.temp_mdeg, 0);
+        assert_eq!(parsed.delta, None);
+    }
+
+    #[test]
+    fn signed_int_runtime_helpers_round_trip_negatives() {
+        let mut b = MessageBuilder::new(0, 0);
+        let start = b.len();
+        __rt::emit_i32_attr(&mut b, 50, -98_765);
+        let bytes = &b.as_bytes()[start..];
+        let mut found = None;
+        for (ty, payload) in __rt::attr_iter(bytes) {
+            if ty == 50 {
+                found = Some(__rt::parse_i32_attr(payload).unwrap());
+            }
+        }
+        assert_eq!(found, Some(-98_765));
     }
 
     #[test]

@@ -184,6 +184,7 @@ enum WireKind {
     U16,
     U32,
     U64,
+    I32,
     Str,
     Bytes,
     Optional(Box<WireKind>),
@@ -198,6 +199,7 @@ impl WireKind {
             Self::U16 => quote! { u16 },
             Self::U32 => quote! { u32 },
             Self::U64 => quote! { u64 },
+            Self::I32 => quote! { i32 },
             Self::Str => quote! { ::std::string::String },
             Self::Bytes => quote! { ::std::vec::Vec<u8> },
             Self::Optional(inner) => {
@@ -212,6 +214,7 @@ impl WireKind {
     fn default_expr(&self) -> TokenStream2 {
         match self {
             Self::U8 | Self::U16 | Self::U32 | Self::U64 => quote! { 0 },
+            Self::I32 => quote! { 0i32 },
             Self::Str => quote! { ::std::string::String::new() },
             Self::Bytes => quote! { ::std::vec::Vec::new() },
             Self::Optional(_) => quote! { ::core::option::Option::None },
@@ -225,6 +228,7 @@ impl WireKind {
             Self::U16 => quote! { ::nlink::macros::__rt::parse_u16_attr },
             Self::U32 => quote! { ::nlink::macros::__rt::parse_u32_attr },
             Self::U64 => quote! { ::nlink::macros::__rt::parse_u64_attr },
+            Self::I32 => quote! { ::nlink::macros::__rt::parse_i32_attr },
             Self::Str => quote! { ::nlink::macros::__rt::parse_str_attr },
             Self::Bytes => quote! { ::nlink::macros::__rt::parse_bytes_attr },
             Self::Optional(inner) => inner.parse_fn(),
@@ -252,6 +256,9 @@ impl WireKind {
             },
             Self::U64 => quote! {
                 ::nlink::macros::__rt::emit_u64_attr(#builder, (#attr_expr) as u16, #value_expr);
+            },
+            Self::I32 => quote! {
+                ::nlink::macros::__rt::emit_i32_attr(#builder, (#attr_expr) as u16, #value_expr);
             },
             Self::Str => quote! {
                 ::nlink::macros::__rt::emit_str_attr(#builder, (#attr_expr) as u16, #value_expr);
@@ -381,6 +388,7 @@ fn classify_type(ty: &Type) -> syn::Result<WireKind> {
         "u16" => Ok(WireKind::U16),
         "u32" => Ok(WireKind::U32),
         "u64" => Ok(WireKind::U64),
+        "i32" => Ok(WireKind::I32),
         "String" => Ok(WireKind::Str),
         "Vec" => {
             // Only Vec<u8> is supported.
@@ -426,7 +434,7 @@ fn classify_type(ty: &Type) -> syn::Result<WireKind> {
             ty,
             format!(
                 "unsupported field type `{other}` in #[derive(GenlMessage)]. \
-                 Supported: u8, u16, u32, u64, String, Vec<u8>, Option<T>. \
+                 Supported: u8, u16, u32, u64, i32, String, Vec<u8>, Option<T>. \
                  (Nested attribute groups via NetlinkAttrs land in a follow-up phase.)"
             ),
         )),

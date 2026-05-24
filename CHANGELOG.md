@@ -6,6 +6,14 @@ All notable changes to this project will be documented in this file.
 
 ### Added
 
+- **`i32` field support in `#[derive(GenlMessage)]`** (Plan 154
+  Phase 8.1). The first of the five Phase 8 macro extensions —
+  smallest mechanical piece. Adds `WireKind::I32` to the
+  field-type-mapping table and `emit_i32_attr` / `parse_i32_attr`
+  to `nlink::macros::__rt`. Unblocks DPLL's `temp_mdeg: Option<i32>`
+  and any other signed-int kernel attribute. 2 new tests cover
+  the positive + negative + Option<i32> round-trips.
+
 - **`Transaction::{add_table_with_flags, del_chain, del_rule,
   add_flowtable, del_flowtable}`** on the nftables batch type
   (Plan 150 §9.4 / Plan 157 coordination follow-up). The batch
