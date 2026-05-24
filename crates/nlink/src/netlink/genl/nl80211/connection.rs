@@ -8,7 +8,7 @@ use crate::netlink::{
     error::{Error, Result},
     genl::{CtrlAttr, CtrlAttrMcastGrp, CtrlCmd, GENL_HDRLEN, GENL_ID_CTRL, GenlMsgHdr},
     message::{MessageIter, NLM_F_ACK, NLM_F_DUMP, NLM_F_REQUEST, NlMsgError},
-    protocol::{AsyncProtocolInit, Nl80211, ProtocolState},
+    protocol::{AsyncProtocolInit, Nl80211},
     socket::NetlinkSocket,
 };
 
@@ -26,31 +26,6 @@ impl AsyncProtocolInit for Nl80211 {
 }
 
 impl Connection<Nl80211> {
-    /// Create a new nl80211 connection.
-    ///
-    /// Resolves the "nl80211" GENL family ID during initialization.
-    ///
-    /// # Example
-    ///
-    /// ```ignore
-    /// use nlink::netlink::{Connection, Nl80211};
-    ///
-    /// let conn = Connection::<Nl80211>::new_async().await?;
-    /// let ifaces = conn.get_interfaces().await?;
-    /// ```
-    #[tracing::instrument(level = "debug", skip_all, fields(method = "new_async"))]
-    pub async fn new_async() -> Result<Self> {
-        let socket = NetlinkSocket::new(Nl80211::PROTOCOL)?;
-        let resolved = resolve_nl80211_family(&socket).await?;
-        let state = Nl80211 {
-            family_id: resolved.family_id,
-            scan_group_id: resolved.scan_group_id,
-            mlme_group_id: resolved.mlme_group_id,
-            regulatory_group_id: resolved.regulatory_group_id,
-            config_group_id: resolved.config_group_id,
-        };
-        Ok(Self::from_parts(socket, state))
-    }
 
     /// Get the nl80211 family ID.
     pub fn family_id(&self) -> u16 {

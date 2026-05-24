@@ -17,7 +17,7 @@ use crate::netlink::{
     genl::{CtrlAttr, CtrlAttrMcastGrp, CtrlCmd, GENL_HDRLEN, GENL_ID_CTRL, GenlMsgHdr},
     interface_ref::InterfaceRef,
     message::{MessageIter, NLM_F_ACK, NLM_F_DUMP, NLM_F_REQUEST, NlMsgError},
-    protocol::{AsyncProtocolInit, Ethtool, ProtocolState, Route},
+    protocol::{AsyncProtocolInit, Ethtool, Route},
     socket::NetlinkSocket,
 };
 
@@ -32,31 +32,6 @@ impl AsyncProtocolInit for Ethtool {
 }
 
 impl Connection<Ethtool> {
-    /// Create a new ethtool connection.
-    ///
-    /// This resolves the ethtool GENL family ID during initialization.
-    ///
-    /// # Example
-    ///
-    /// ```ignore
-    /// use nlink::netlink::{Connection, Ethtool};
-    ///
-    /// let conn = Connection::<Ethtool>::new_async().await?;
-    /// let state = conn.get_link_state("eth0").await?;
-    /// println!("Link: {}", if state.link { "up" } else { "down" });
-    /// ```
-    #[tracing::instrument(level = "debug", skip_all, fields(method = "new_async"))]
-    pub async fn new_async() -> Result<Self> {
-        let socket = NetlinkSocket::new(Ethtool::PROTOCOL)?;
-        let (family_id, monitor_group_id) = resolve_ethtool_family(&socket).await?;
-
-        let state = Ethtool {
-            family_id,
-            monitor_group_id,
-        };
-        Ok(Self::from_parts(socket, state))
-    }
-
     /// Get the ethtool family ID.
     pub fn family_id(&self) -> u16 {
         self.state().family_id

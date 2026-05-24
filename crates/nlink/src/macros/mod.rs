@@ -32,7 +32,7 @@
 //! | 3b | `#[derive(GenlMessage)]` (NetlinkAttrs deferred) | ✓ |
 //! | 4 | `#[genl_family(...)]` attribute macro | ✓ |
 //! | 5 | `Connection::<F>::send_typed<M, R>` + `dump_typed_stream` | ✓ |
-//! | 6 | Worked example + recipe | — |
+//! | 6 | Worked example + recipe | ✓ |
 //! | 7 | Final re-export polish + CHANGELOG framing | — |
 
 pub use nlink_macros::{genl_family, GenlAttribute, GenlCommand, GenlEnum, GenlMessage};

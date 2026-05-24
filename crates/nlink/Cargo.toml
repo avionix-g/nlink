@@ -192,6 +192,11 @@ path = "examples/genl/ethtool_rings.rs"
 name = "ethtool_monitor"
 path = "examples/genl/ethtool_monitor.rs"
 
+# nlink-macros showcase
+[[example]]
+name = "macros_define_taskstats"
+path = "examples/macros/define_taskstats.rs"
+
 # Uevent examples (device hotplug)
 [[example]]
 name = "uevent_device_monitor"

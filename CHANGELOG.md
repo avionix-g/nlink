@@ -6,6 +6,33 @@ All notable changes to this project will be documented in this file.
 
 ### Added
 
+- **Worked example + recipe for the macro stack** (Plan 154
+  Phase 6):
+  - [`crates/nlink/examples/macros/define_taskstats.rs`](crates/nlink/examples/macros/define_taskstats.rs)
+    — full kernel taskstats family declared end-to-end in ~30 lines
+    via the macros. Runs the canonical
+    `Connection::<Taskstats>::new_async()` + `conn.send_typed(req)`
+    cycle against a real kernel family.
+  - [`docs/recipes/define-your-own-genl-family.md`](docs/recipes/define-your-own-genl-family.md)
+    — narrative recipe walking through the four macros
+    (`#[genl_family]` + `GenlCommand` + `GenlAttribute` +
+    `GenlMessage`) and the generic dispatch that closes the loop.
+
+- **Generic `Connection::<P: AsyncConstructible>::new_async()`**
+  consolidation. The six in-tree GENL families
+  (`Wireguard`, `Macsec`, `Mptcp`, `Devlink`, `Nl80211`, `Ethtool`)
+  used to each carry a hand-rolled inherent `new_async()`
+  duplicating the same socket-create + `resolve_async` glue.
+  Replaced with a single generic
+  `impl<P: AsyncConstructible + AsyncProtocolInit> Connection<P>`
+  constructor. This is also what makes macro-defined families
+  (`#[genl_family(...)]`) plug into the canonical API for free:
+  the macro emits the `AsyncProtocolInit` impl and the generic
+  constructor does the rest.
+
+  Public API unchanged — `Connection::<Wireguard>::new_async().await?`
+  still works, just routes through the generic impl now.
+
 - **`Connection::<F: GenlFamily>::send_typed<M, R>`** +
   **`dump_typed_stream<M, R>`** (Plan 154 Phase 5) — the generic
   send-side dispatch that closes the Plan 154 loop: with

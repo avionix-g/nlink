@@ -8,7 +8,7 @@ use crate::netlink::{
     error::{Error, Result},
     genl::{CtrlAttr, CtrlAttrMcastGrp, CtrlCmd, GENL_HDRLEN, GENL_ID_CTRL, GenlMsgHdr},
     message::{MessageIter, NLM_F_ACK, NLM_F_DUMP, NLM_F_REQUEST, NlMsgError},
-    protocol::{AsyncProtocolInit, Devlink, ProtocolState},
+    protocol::{AsyncProtocolInit, Devlink},
     socket::NetlinkSocket,
 };
 
@@ -23,29 +23,6 @@ impl AsyncProtocolInit for Devlink {
 }
 
 impl Connection<Devlink> {
-    /// Create a new devlink connection.
-    ///
-    /// Resolves the "devlink" GENL family ID during initialization.
-    ///
-    /// # Example
-    ///
-    /// ```ignore
-    /// use nlink::netlink::{Connection, Devlink};
-    ///
-    /// let conn = Connection::<Devlink>::new_async().await?;
-    /// let devices = conn.get_devices().await?;
-    /// ```
-    #[tracing::instrument(level = "debug", skip_all, fields(method = "new_async"))]
-    pub async fn new_async() -> Result<Self> {
-        let socket = NetlinkSocket::new(Devlink::PROTOCOL)?;
-        let (family_id, monitor_group_id) = resolve_devlink_family(&socket).await?;
-        let state = Devlink {
-            family_id,
-            monitor_group_id,
-        };
-        Ok(Self::from_parts(socket, state))
-    }
-
     /// Get the devlink family ID.
     pub fn family_id(&self) -> u16 {
         self.state().family_id

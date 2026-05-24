@@ -359,10 +359,15 @@ recipe rather than re-synthesizing:
   — ctnetlink mutation + multicast NEW/DESTROY events.
 - [`nftables-stateful-fw`](docs/recipes/nftables-stateful-fw.md) —
   table/chain/rule plumbing + atomic transactions.
+- [`define-your-own-genl-family`](docs/recipes/define-your-own-genl-family.md)
+  — declare a complete custom GENL family in ~30 lines via
+  `nlink-macros` (`#[genl_family]` + `#[derive(GenlMessage)]` +
+  `conn.send_typed(req).await?`).
 
 Per-subsystem runnable examples live under
 `crates/nlink/examples/`: `genl/{wireguard,macsec,mptcp,ethtool_*,
-nl80211,devlink}.rs`, `netfilter/{conntrack,conntrack_events}.rs`,
+nl80211,devlink}.rs`, `macros/define_taskstats.rs`,
+`netfilter/{conntrack,conntrack_events}.rs`,
 `{audit,bridge,config,connector,diagnostics,events,fib_lookup,
 impair,lab,namespace,nftables,ratelimit,route,selinux,sockdiag,
 uevent,xfrm}/`. Read these directly when learning a subsystem;

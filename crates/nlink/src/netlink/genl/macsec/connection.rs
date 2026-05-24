@@ -15,7 +15,7 @@ use crate::netlink::{
     genl::{CtrlAttr, CtrlCmd, GENL_HDRLEN, GENL_ID_CTRL, GenlMsgHdr},
     interface_ref::InterfaceRef,
     message::{MessageIter, NLM_F_ACK, NLM_F_DUMP, NLM_F_REQUEST, NlMsgError},
-    protocol::{AsyncProtocolInit, Macsec, ProtocolState, Route},
+    protocol::{AsyncProtocolInit, Macsec, Route},
     socket::NetlinkSocket,
 };
 
@@ -31,27 +31,6 @@ use crate::netlink::types::macsec::{
 };
 
 impl Connection<Macsec> {
-    /// Create a new MACsec connection.
-    ///
-    /// This resolves the MACsec GENL family ID during initialization.
-    ///
-    /// # Example
-    ///
-    /// ```ignore
-    /// use nlink::netlink::{Connection, Macsec};
-    ///
-    /// let conn = Connection::<Macsec>::new_async().await?;
-    /// let device = conn.get_device("macsec0").await?;
-    /// ```
-    #[tracing::instrument(level = "debug", skip_all, fields(method = "new_async"))]
-    pub async fn new_async() -> Result<Self> {
-        let socket = NetlinkSocket::new(Macsec::PROTOCOL)?;
-        let family_id = resolve_macsec_family(&socket).await?;
-
-        let state = Macsec { family_id };
-        Ok(Self::from_parts(socket, state))
-    }
-
     /// Get the MACsec family ID.
     pub fn family_id(&self) -> u16 {
         self.state().family_id

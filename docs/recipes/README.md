@@ -80,6 +80,12 @@ to the hand-rolled netlink primitives if you want to go deeper.
   delete-then-add, namespace cleanup, cross-fork pitfalls,
   cancellation safety in async.
 
+- [**Define your own GENL family**](define-your-own-genl-family.md)
+  — declare a complete custom Generic Netlink family in ~30 lines
+  via `nlink-macros` (`#[genl_family]` + `#[derive(GenlMessage)]`
+  + `conn.send_typed(req).await?`). Walked through against the
+  kernel's `taskstats` family (Plan 154, 0.16+).
+
 ## Recipe shape
 
 Every recipe follows the same structure:

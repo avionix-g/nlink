@@ -153,6 +153,53 @@ where
 }
 
 // ============================================================================
+// Generic async constructor for GENL families
+// ============================================================================
+//
+// `new_async()` was hand-rolled per-family in 0.15 (one inherent
+// `impl Connection<Wireguard>::new_async()`, one for `Macsec`, etc.).
+// 0.16's `#[genl_family(...)]` macro emits the `AsyncProtocolInit`
+// impl that this generic constructor needs, so macro-defined
+// families plug into the canonical API automatically. The
+// hand-rolled per-family `new_async()` impls remain for backwards
+// compatibility (the inherent versions take priority over this
+// generic one when both apply).
+
+impl<P> Connection<P>
+where
+    P: super::protocol::AsyncProtocolInit
+        + super::protocol::construction::AsyncConstructible,
+{
+    /// Create a connection for a GENL family whose ID must be
+    /// resolved at construction time.
+    ///
+    /// Generic over any `P: AsyncConstructible + AsyncProtocolInit`
+    /// — the in-tree GENL family markers (`Wireguard`, `Macsec`,
+    /// `Mptcp`, `Devlink`, `Nl80211`, `Ethtool`) and every family
+    /// declared via `#[genl_family(name = ..., version = ...)]`
+    /// satisfy the bound.
+    ///
+    /// Bounded so that sync-only markers (`Route`, `Generic`,
+    /// `SockDiag`, `Netfilter`, etc.) are a **compile error** here
+    /// — those don't need async setup and should call
+    /// [`Self::new`].
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// use nlink::netlink::{Connection, Wireguard};
+    ///
+    /// let wg = Connection::<Wireguard>::new_async().await?;
+    /// ```
+    #[instrument(level = "info", skip_all, fields(protocol = std::any::type_name::<P>()))]
+    pub async fn new_async() -> Result<Self> {
+        let socket = NetlinkSocket::new(P::PROTOCOL)?;
+        let state = P::resolve_async(&socket).await?;
+        Ok(Self::from_parts(socket, state))
+    }
+}
+
+// ============================================================================
 // Shared methods for all protocol types
 // ============================================================================
 
