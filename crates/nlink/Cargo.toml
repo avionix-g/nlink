@@ -49,6 +49,10 @@ winnow = { workspace = true }
 serde_json = { workspace = true, optional = true }
 zerocopy = { workspace = true }
 tokio-stream = { workspace = true }
+# Bitflags newtype generation — used in-tree for DPLL pin
+# capabilities (Plan 156) and re-usable by downstream consumers
+# defining their own GENL families with bitmask fields.
+bitflags = { workspace = true }
 # Proc-macro derives (GenlCommand, GenlAttribute, GenlEnum,
 # eventually GenlMessage + #[genl_family]). Re-exported from
 # `nlink::macros` so downstream code only depends on `nlink`.
@@ -60,10 +64,6 @@ inotify = { version = "0.11", default-features = false, features = ["stream"], o
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
-# Bitflags newtype generation — used by the GenlMessage derive's
-# bitflags-field-support unit tests. Not a runtime nlink dep;
-# downstream consumers bring their own bitflags version.
-bitflags = { workspace = true }
 
 [package.metadata.docs.rs]
 all-features = true

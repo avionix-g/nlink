@@ -60,6 +60,14 @@
 
 use crate::macros::genl_family;
 
+pub mod types;
+
+pub use types::{
+    DpllAttr, DpllClockQualityLevel, DpllCmd, DpllFeatureState, DpllLockStatus,
+    DpllLockStatusError, DpllMode, DpllPinAttr, DpllPinCapabilities, DpllPinDirection,
+    DpllPinState, DpllPinType, DpllType,
+};
+
 /// DPLL Generic Netlink family marker.
 ///
 /// Constructed via [`Connection::<Dpll>::new_async()`][Connection]
