@@ -416,14 +416,17 @@ tracker. Headlines that landed so far:
   groups via `nested` hint. See
   [`docs/recipes/define-your-own-genl-family.md`](docs/recipes/define-your-own-genl-family.md)
   + [`crates/nlink/examples/macros/define_taskstats.rs`](crates/nlink/examples/macros/define_taskstats.rs).
-- **Plan 149 — streaming dump API** (🟡): `dump_stream<T>` +
+- **Plan 149 — streaming dump API** (🟢): `dump_stream<T>` +
+  `dump_stream_with_body<T>` (caller-parameterized body) +
   typed wrappers for links/routes/neighbors/addresses + qdiscs/
-  classes/filters + XFRM SAs/SPs (`stream_sas` / `stream_sps`,
-  `FromNetlink` impls via refactored payload-only parsers).
-  O(1) memory iteration over large kernel dumps. Conntrack +
-  nft-rules streaming still deferred — need a `dump_stream` API
-  extension to pass a caller-parameterized body prefix
-  (conntrack: `nfgenmsg.family`).
+  classes/filters + XFRM SAs/SPs (`stream_sas`/`stream_sps`) +
+  conntrack (`stream_conntrack` / `_v4` / `_v6`) +
+  nft-rules (`stream_rules(table, family)`). O(1) memory
+  iteration over BGP/conntrack/IPsec/nft-scale dumps. The
+  `_with_body` extension reuses each family's existing
+  payload parser (parse_conntrack_body, parse_rule, etc.) so
+  one parser per kind serves eager / multicast / streaming
+  paths.
 - **Plan 150 — nftables flowtable** (🟡): full CRUD + multicast
   events (`Connection::<Nftables>::subscribe` + 8 typed event
   variants). Counters introspection still deferred — kernel
