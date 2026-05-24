@@ -9,16 +9,17 @@
 //! the macro stack's `CTRL_ATTR_MCAST_GROUPS` parsing (Plan 156
 //! Phase 5).
 //!
-//! Subscribe via [`Connection::subscribe_group`] (the generic
-//! helper) or [`Connection::<Dpll>::subscribe_monitor`] (the
-//! family-specific convenience). Consume via the existing
-//! [`EventSource`][es]-driven
-//! [`Connection::events()`][cev] / [`into_events()`][cinto].
+//! Subscribe via [`subscribe_group`][sg] (the generic helper) or
+//! [`subscribe_monitor`][sm] (the family-specific convenience).
+//! Consume via the existing [`EventSource`][es]-driven
+//! [`events()`][cev] / [`into_events()`][cinto].
 //!
 //! [nasync]: crate::netlink::Connection
+//! [sg]: crate::netlink::Connection::subscribe_group
+//! [sm]: crate::netlink::Connection::subscribe_monitor
 //! [es]: crate::netlink::EventSource
-//! [cev]: crate::netlink::Connection
-//! [cinto]: crate::netlink::Connection
+//! [cev]: crate::netlink::Connection::events
+//! [cinto]: crate::netlink::Connection::into_events
 //!
 //! # Example
 //!

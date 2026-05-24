@@ -74,10 +74,10 @@ mod private {
 ///
 /// # Implementors
 ///
-/// - [`Route`](super::Route) - Network configuration events (link, address, route, neighbor, TC)
-/// - [`KobjectUevent`](super::KobjectUevent) - Device hotplug events
-/// - [`Connector`](super::Connector) - Process lifecycle events (fork, exec, exit)
-/// - [`SELinux`](super::SELinux) - SELinux policy/enforcement events
+/// - [`Route`] - Network configuration events (link, address, route, neighbor, TC)
+/// - [`KobjectUevent`] - Device hotplug events
+/// - [`Connector`] - Process lifecycle events (fork, exec, exit)
+/// - [`SELinux`] - SELinux policy/enforcement events
 pub trait EventSource: ProtocolState + private::Sealed {
     /// The event type produced by this protocol.
     type Event: Send + 'static;
