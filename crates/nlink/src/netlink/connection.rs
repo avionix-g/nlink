@@ -58,6 +58,20 @@ pub struct Connection<P: ProtocolState> {
     timeout: Option<Duration>,
 }
 
+/// Default operation timeout for `Connection<P>` (Plan 171).
+///
+/// 30 seconds — long enough that legitimate slow operations don't
+/// trip it (kernel dumps on huge route tables: ~5-10s; nft batch
+/// commits on thousands of rules: ~2-3s), short enough to fail
+/// fast on the "hidden hang" class of bugs (kernel response
+/// anomaly, missing DONE marker, etc.) that would otherwise block
+/// indefinitely. Tunable via [`Connection::timeout`]; opt out via
+/// [`Connection::no_timeout`].
+///
+/// The number aligns with the integration suite's existing 30s
+/// explicit cap on root-gated tests — same budget, same intuition.
+const DEFAULT_OPERATION_TIMEOUT: Duration = Duration::from_secs(30);
+
 // ============================================================================
 // Shared methods for protocol types that implement Default
 // ============================================================================
@@ -95,7 +109,7 @@ where
         Ok(Self {
             socket: NetlinkSocket::new(P::PROTOCOL)?,
             state: P::default(),
-            timeout: None,
+            timeout: Some(DEFAULT_OPERATION_TIMEOUT),
         })
     }
 
@@ -122,7 +136,7 @@ where
         Ok(Self {
             socket: NetlinkSocket::new_in_namespace(P::PROTOCOL, ns_fd)?,
             state: P::default(),
-            timeout: None,
+            timeout: Some(DEFAULT_OPERATION_TIMEOUT),
         })
     }
 
@@ -147,7 +161,7 @@ where
         Ok(Self {
             socket: NetlinkSocket::new_in_namespace_path(P::PROTOCOL, ns_path)?,
             state: P::default(),
-            timeout: None,
+            timeout: Some(DEFAULT_OPERATION_TIMEOUT),
         })
     }
 }
@@ -219,10 +233,15 @@ impl<P: ProtocolState> Connection<P> {
         &self.state
     }
 
-    /// Set a default timeout for all netlink operations.
+    /// Override the operation timeout.
     ///
-    /// Operations that exceed the timeout return [`Error::Timeout`].
-    /// By default, no timeout is set and operations wait indefinitely.
+    /// Operations that exceed the configured duration return
+    /// [`Error::Timeout`]. As of 0.17 (Plan 171) the **default is
+    /// 30 seconds** — long enough for legitimate slow ops, short
+    /// enough to fail fast on the "hidden hang" class of bugs
+    /// (kernel response anomaly, missing DONE marker, etc.).
+    /// Use this method to set a different bound; use
+    /// [`Self::no_timeout`] to opt out entirely.
     ///
     /// # Example
     ///
@@ -238,7 +257,10 @@ impl<P: ProtocolState> Connection<P> {
         self
     }
 
-    /// Clear the timeout (operations will wait indefinitely).
+    /// Opt out of the default operation timeout. Use sparingly —
+    /// without a timeout, any kernel response anomaly hangs the
+    /// call indefinitely (the failure mode that caused the 0.16
+    /// cycle's `send_batch` CI hang; see Plan 170).
     pub fn no_timeout(mut self) -> Self {
         self.timeout = None;
         self
@@ -318,7 +340,7 @@ impl<P: ProtocolState> Connection<P> {
         Self {
             socket,
             state,
-            timeout: None,
+            timeout: Some(DEFAULT_OPERATION_TIMEOUT),
         }
     }
 
@@ -2566,5 +2588,43 @@ mod send_sync_tests {
     fn connection_is_send_sync() {
         assert_send::<Connection<Route>>();
         assert_sync::<Connection<Route>>();
+    }
+
+    /// Plan 171 — every fresh Connection<P> ships with the default
+    /// 30s operation timeout. Caller can override via
+    /// `.timeout(d)` or opt out via `.no_timeout()`.
+    #[tokio::test]
+    async fn connection_default_timeout_is_30s() {
+        let conn = Connection::<Route>::new().expect("socket open");
+        assert_eq!(
+            conn.get_timeout(),
+            Some(DEFAULT_OPERATION_TIMEOUT),
+            "Plan 171: fresh Connection<P> must default to 30s timeout"
+        );
+        assert_eq!(
+            DEFAULT_OPERATION_TIMEOUT,
+            Duration::from_secs(30),
+            "Plan 171: documented constant value",
+        );
+    }
+
+    #[tokio::test]
+    async fn connection_no_timeout_clears_default() {
+        let conn = Connection::<Route>::new()
+            .expect("socket open")
+            .no_timeout();
+        assert_eq!(
+            conn.get_timeout(),
+            None,
+            "Plan 171: .no_timeout() must opt out of the default"
+        );
+    }
+
+    #[tokio::test]
+    async fn connection_timeout_override_replaces_default() {
+        let conn = Connection::<Route>::new()
+            .expect("socket open")
+            .timeout(Duration::from_secs(5));
+        assert_eq!(conn.get_timeout(), Some(Duration::from_secs(5)));
     }
 }

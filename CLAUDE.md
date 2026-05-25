@@ -325,9 +325,11 @@ Specific not-found cases get typed variants
 (`Error::QdiscNotFound { .. }`, etc.) for reconcile patterns.
 Kernel errors carry `KernelWithContext` (operation name + args +
 errno), so messages read like `"add_link(veth0, kind=veth): File
-exists (errno 17)"`. Operation timeouts are opt-in via
-`Connection::timeout(Duration)`; default is none (Plan 171 is the
-0.17 work item to make this 30s by default).
+exists (errno 17)"`. **Operation timeout defaults to 30 seconds**
+(Plan 171 — closes the "hidden hang" class). Override with
+`Connection::timeout(Duration)`; opt out (rarely useful) with
+`.no_timeout()`. The default surfaces any kernel response
+anomaly as `Error::Timeout` instead of an indefinite block.
 
 ## Recv-loop shape (canonical)
 
