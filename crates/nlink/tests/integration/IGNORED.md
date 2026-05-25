@@ -29,11 +29,11 @@ or this catalog.
 
 ## nftables_reconcile.rs
 
-| Test | Reason | Tracking |
-|---|---|---|
-| `reconcile_idempotent_reapply_yields_empty_diff` | tracking-plan-deferred | [Plan 178](../../../../plans/178-nftables-diff-body-bytes-false-positive-plan.md) — body-bytes diff false-positive on idempotent reapply |
-| `reconcile_replace_one_rule_emits_replace_op` | tracking-plan-deferred | [Plan 178](../../../../plans/178-nftables-diff-body-bytes-false-positive-plan.md) — body-bytes diff false-positive flags every keyed rule as needing replacement |
-| `reconcile_delete_one_rule_emits_delete_op` | tracking-plan-deferred | [Plan 178](../../../../plans/178-nftables-diff-body-bytes-false-positive-plan.md) — body-bytes diff false-positive: delete-detection depends on per-rule identity match across diff invocations |
+All entries here were un-ignored when [Plan 178](../../../../plans/178-nftables-diff-body-bytes-false-positive-plan.md)
+fixed the underlying `NftablesDiff` body-bytes false-positive
+(commit landed as the closeout of Plan 178 §3). The catalog
+section is kept as a marker — if a future regression in this
+file is `#[ignore]`'d, add a row here with a tracking plan.
 
 ## diagnostics.rs
 

@@ -4,6 +4,34 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Fixed
+
+- **`NftablesConfig::diff` body-bytes false-positive (Plan 178)**
+  — keyed rules were flagged as `to_replace` on every idempotent
+  re-diff, churning kernel state on every reapply for any caller
+  of the declarative-config reconcile loop. Two coordinated
+  fixes:
+  - **`Register` discriminants**: switched from
+    `NFT_REG32_xx` (`8..=11`, 4-byte registers) to the
+    canonical `NFT_REG_x` form (`1..=4`, 16-byte registers).
+    The kernel canonicalizes any 4-byte transfer through
+    `NFT_REG32_00` to `NFT_REG_1` internally and dumps the
+    canonical form, so the lib's submission needs to match.
+    Also enum now `#[repr(u32)]` — locks the layout so the
+    `as u32` wire-format cast is well-defined.
+  - **`normalize_tlv` in the diff path**: walks both sides of
+    the comparison as TLV trees, strips `NLA_F_NESTED` (`0x8000`)
+    and `NLA_F_NET_BYTEORDER` (`0x4000`) hint bits, and sorts
+    sibling attributes by type at every depth. Closes the
+    last two divergence sources (the writer set `NLA_F_NESTED`
+    on every nest; the kernel doesn't. The writer emits
+    attributes in source order; the kernel emits them in
+    canonical numeric order).
+  - Un-ignored 3 `nftables_reconcile::*` tests (idempotent
+    reapply, replace, delete) that were `#[ignore]`'d under
+    Plan 178 tracking. They now exercise the full diff +
+    apply + re-diff cycle.
+
 ### Added
 
 - **`docs/release-validation-manual.md` (Plan 176)** — pre-cut

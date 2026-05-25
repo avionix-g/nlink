@@ -90,7 +90,6 @@ async fn reconcile_empty_to_full_applies_everything() -> nlink::Result<()> {
 }
 
 #[tokio::test]
-#[ignore = "Plan 178 — body-bytes diff false-positive on idempotent reapply (Plan 170 hang fix surfaced this)"]
 async fn reconcile_idempotent_reapply_yields_empty_diff() -> nlink::Result<()> {
     require_root!();
     nlink::require_modules!("nf_tables");
@@ -135,7 +134,6 @@ async fn reconcile_add_one_rule_in_existing_chain() -> nlink::Result<()> {
 }
 
 #[tokio::test]
-#[ignore = "Plan 178 — body-bytes diff false-positive flags every keyed rule as needing replacement"]
 async fn reconcile_replace_one_rule_emits_replace_op() -> nlink::Result<()> {
     require_root!();
     nlink::require_modules!("nf_tables");
@@ -171,7 +169,6 @@ async fn reconcile_replace_one_rule_emits_replace_op() -> nlink::Result<()> {
 }
 
 #[tokio::test]
-#[ignore = "Plan 178 — body-bytes diff false-positive: delete-detection depends on per-rule identity match across diff invocations"]
 async fn reconcile_delete_one_rule_emits_delete_op() -> nlink::Result<()> {
     require_root!();
     nlink::require_modules!("nf_tables");
@@ -241,37 +238,3 @@ async fn apply_reconcile_succeeds_in_one_attempt_when_uncontended() -> nlink::Re
     .await
 }
 
-// Plan 178 Phase 1 diagnostic — runs the idempotent reapply
-// scenario but DOES NOT assert. Triggers the Plan 178
-// `tracing::trace!` instrumentation in
-// `crates/nlink/src/netlink/nftables/config/diff.rs` so CI logs
-// the declared-vs-kernel hex for every keyed-rule comparison
-// that diverges. With `RUST_LOG=nlink::netlink::nftables=trace`
-// (set by the integration workflow per Plan 174), the run log
-// contains the bytes the fix needs to target. Delete this test
-// once the root cause lands in Plan 178 Phase 2/3 and the three
-// `reconcile_*` tests it surfaced are un-ignored + green.
-#[tokio::test]
-async fn plan_178_diag_emit_body_bytes_on_idempotent_reapply() -> nlink::Result<()> {
-    require_root!();
-    nlink::require_modules!("nf_tables");
-
-    with_timeout(async {
-        let ns = TestNamespace::new("plan178-diag")?;
-        let nft = nft_in_ns(&ns)?;
-
-        let cfg = cfg_with_n_rules(2);
-        cfg.diff(&nft).await?.apply(&nft).await?;
-
-        let again = cfg.diff(&nft).await?;
-        eprintln!(
-            "[Plan 178 diag] second-diff summary: {} (rules_to_replace={})",
-            again.summary(),
-            again.rules_to_replace.len(),
-        );
-        // No assertion — the test exists to fire the trace
-        // instrumentation, not to verify behavior.
-        Ok(())
-    })
-    .await
-}
