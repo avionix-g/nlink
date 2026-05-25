@@ -325,10 +325,11 @@ pub fn has_module(name: &str) -> bool {
 
 /// Initialize a `tracing-subscriber` for integration tests.
 ///
-/// Auto-invoked by [`require_root`] / [`require_root_void`] so every
-/// test path emits useful logs in CI. Honors `RUST_LOG` (default
-/// `info`). Routes through libtest's capture (`with_test_writer`) so
-/// output only prints on failure or with `--nocapture`.
+/// Auto-invoked by [`crate::require_root!`] /
+/// [`crate::require_root_void!`] so every test path emits useful
+/// logs in CI. Honors `RUST_LOG` (default `info`). Routes through
+/// libtest's capture (`with_test_writer`) so output only prints on
+/// failure or with `--nocapture`.
 ///
 /// Per Plan 174: every `Connection` method carries
 /// `#[tracing::instrument]`, but the spans are silent without a
@@ -356,7 +357,7 @@ pub fn init_test_tracing() {
 /// `CAP_SYS_ADMIN`.
 ///
 /// Also initializes a `tracing-subscriber` (via
-/// [`init_test_tracing`]) so CI logs surface the spans on every
+/// [`crate::lab::init_test_tracing`]) so CI logs surface the spans on every
 /// `Connection` method.
 ///
 /// ```ignore
@@ -378,8 +379,8 @@ macro_rules! require_root {
     };
 }
 
-/// Like [`require_root`] but for test functions whose return type is
-/// `()` rather than `Result<()>`.
+/// Like [`crate::require_root!`] but for test functions whose
+/// return type is `()` rather than `Result<()>`.
 #[macro_export]
 macro_rules! require_root_void {
     () => {
@@ -398,8 +399,9 @@ macro_rules! require_root_void {
 /// clean skip rather than a cryptic `is_not_supported()` error
 /// deep in the test body.
 ///
-/// Wraps [`has_module`]. Pair with [`require_root`] — the module
-/// can only be checked once the test is actually trying to run.
+/// Wraps [`has_module`]. Pair with [`crate::require_root!`] — the
+/// module can only be checked once the test is actually trying to
+/// run.
 ///
 /// ```ignore
 /// #[tokio::test]
