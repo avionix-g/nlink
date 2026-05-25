@@ -529,45 +529,50 @@ impl Connection<Devlink> {
         let msg = builder.finish();
         self.socket().send(&msg).await?;
 
-        // Collect response
-        let mut result_payload: Option<Vec<u8>> = None;
+        // Plan 172 — wrap the recv loop in the Connection-level
+        // operation timeout (Plan 171 default: 30s).
+        self.with_timeout(async {
+            // Collect response
+            let mut result_payload: Option<Vec<u8>> = None;
 
-        loop {
-            let data: Vec<u8> = self.socket().recv_msg().await?;
-            let mut done = false;
+            loop {
+                let data: Vec<u8> = self.socket().recv_msg().await?;
+                let mut done = false;
 
-            for msg_result in MessageIter::new(&data) {
-                let (header, payload) = msg_result?;
+                for msg_result in MessageIter::new(&data) {
+                    let (header, payload) = msg_result?;
 
-                if header.nlmsg_seq != seq {
-                    continue;
-                }
-
-                if header.is_error() {
-                    let err = NlMsgError::from_bytes(payload)?;
-                    if !err.is_ack() {
-                        return Err(err.into_error(payload));
+                    if header.nlmsg_seq != seq {
+                        continue;
                     }
-                    done = true;
-                    continue;
+
+                    if header.is_error() {
+                        let err = NlMsgError::from_bytes(payload)?;
+                        if !err.is_ack() {
+                            return Err(err.into_error(payload));
+                        }
+                        done = true;
+                        continue;
+                    }
+
+                    if header.is_done() {
+                        done = true;
+                        break;
+                    }
+
+                    if result_payload.is_none() {
+                        result_payload = Some(payload.to_vec());
+                    }
                 }
 
-                if header.is_done() {
-                    done = true;
+                if done {
                     break;
                 }
-
-                if result_payload.is_none() {
-                    result_payload = Some(payload.to_vec());
-                }
             }
 
-            if done {
-                break;
-            }
-        }
-
-        result_payload.ok_or_else(|| Error::InvalidMessage("no response received".into()))
+            result_payload.ok_or_else(|| Error::InvalidMessage("no response received".into()))
+        })
+        .await
     }
 
     /// Build a GENL command message for a device.
@@ -590,68 +595,78 @@ impl Connection<Devlink> {
         let msg = builder.finish();
         self.socket().send(&msg).await?;
 
-        loop {
-            let data: Vec<u8> = self.socket().recv_msg().await?;
+        // Plan 172 — wrap the recv loop in the Connection-level
+        // operation timeout (Plan 171 default: 30s).
+        self.with_timeout(async {
+            loop {
+                let data: Vec<u8> = self.socket().recv_msg().await?;
 
-            for msg_result in MessageIter::new(&data) {
-                let (header, payload) = msg_result?;
+                for msg_result in MessageIter::new(&data) {
+                    let (header, payload) = msg_result?;
 
-                if header.nlmsg_seq != seq {
-                    continue;
-                }
+                    if header.nlmsg_seq != seq {
+                        continue;
+                    }
 
-                if header.is_error() {
-                    let err = NlMsgError::from_bytes(payload)?;
-                    if err.is_ack() {
+                    if header.is_error() {
+                        let err = NlMsgError::from_bytes(payload)?;
+                        if err.is_ack() {
+                            return Ok(());
+                        }
+                        return Err(err.into_error(payload));
+                    }
+
+                    if header.is_done() {
                         return Ok(());
                     }
-                    return Err(err.into_error(payload));
-                }
-
-                if header.is_done() {
-                    return Ok(());
                 }
             }
-        }
+        })
+        .await
     }
 
     /// Collect all responses from a dump request.
     async fn collect_dump_responses(&self, seq: u32) -> Result<Vec<Vec<u8>>> {
-        let mut results = Vec::new();
+        // Plan 172 — wrap the recv loop in the Connection-level
+        // operation timeout (Plan 171 default: 30s).
+        self.with_timeout(async {
+            let mut results = Vec::new();
 
-        loop {
-            let data: Vec<u8> = self.socket().recv_msg().await?;
-            let mut done = false;
+            loop {
+                let data: Vec<u8> = self.socket().recv_msg().await?;
+                let mut done = false;
 
-            for msg_result in MessageIter::new(&data) {
-                let (header, payload) = msg_result?;
+                for msg_result in MessageIter::new(&data) {
+                    let (header, payload) = msg_result?;
 
-                if header.nlmsg_seq != seq {
-                    continue;
-                }
-
-                if header.is_error() {
-                    let err = NlMsgError::from_bytes(payload)?;
-                    if !err.is_ack() {
-                        return Err(err.into_error(payload));
+                    if header.nlmsg_seq != seq {
+                        continue;
                     }
-                    continue;
+
+                    if header.is_error() {
+                        let err = NlMsgError::from_bytes(payload)?;
+                        if !err.is_ack() {
+                            return Err(err.into_error(payload));
+                        }
+                        continue;
+                    }
+
+                    if header.is_done() {
+                        done = true;
+                        break;
+                    }
+
+                    results.push(payload.to_vec());
                 }
 
-                if header.is_done() {
-                    done = true;
+                if done {
                     break;
                 }
-
-                results.push(payload.to_vec());
             }
 
-            if done {
-                break;
-            }
-        }
-
-        Ok(results)
+            Ok(results)
+        })
+        .await
     }
 }
 

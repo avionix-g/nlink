@@ -652,7 +652,10 @@ impl Connection<Nftables> {
         // anything ≤ end_seq from this socket's lifetime; the
         // end_seq termination check handles the upper bound.
 
-        let recv_loop = async {
+        // (4) Wrap in the Connection-level operation timeout
+        // (Plan 171 default: 30s). Surfaces a missing end-seq
+        // ACK as Error::Timeout instead of an indefinite hang.
+        self.with_timeout(async {
             loop {
                 let data: Vec<u8> = self.socket().recv_msg().await?;
 
@@ -677,7 +680,7 @@ impl Connection<Nftables> {
                             //     the loop with success. Per-op
                             //     ACKs are silently collected.
                             if header.nlmsg_seq == end_seq {
-                                return Ok::<(), crate::netlink::error::Error>(());
+                                return Ok(());
                             }
                             // Per-op ACK — continue waiting for
                             // either another per-op response or
@@ -698,17 +701,8 @@ impl Connection<Nftables> {
                     }
                 }
             }
-        };
-
-        // (4) Hard-cap at 30s pending Plan 171's per-Connection
-        // default. Surfaces a missing end-seq ACK as Error::Timeout
-        // instead of an indefinite hang (the 0.16 cycle's CI bug).
-        // TODO(plan-171): drop this wrap when `Connection<P>`
-        // grows a default operation timeout.
-        match tokio::time::timeout(std::time::Duration::from_secs(30), recv_loop).await {
-            Ok(result) => result,
-            Err(_elapsed) => Err(crate::netlink::error::Error::Timeout),
-        }
+        })
+        .await
     }
 
     // =========================================================================
@@ -787,45 +781,52 @@ impl Connection<Nftables> {
         let msg = builder.finish();
         self.socket().send(&msg).await?;
 
-        let mut results = Vec::new();
+        // Plan 172 — wrap the recv loop in the Connection-level
+        // operation timeout (Plan 171 default: 30s). Without
+        // this, a missing NLMSG_DONE from the kernel would hang
+        // the dump indefinitely.
+        self.with_timeout(async {
+            let mut results = Vec::new();
 
-        loop {
-            let data: Vec<u8> = self.socket().recv_msg().await?;
-            let mut done = false;
+            loop {
+                let data: Vec<u8> = self.socket().recv_msg().await?;
+                let mut done = false;
 
-            for msg_result in MessageIter::new(&data) {
-                let (header, payload) = msg_result?;
+                for msg_result in MessageIter::new(&data) {
+                    let (header, payload) = msg_result?;
 
-                if header.nlmsg_seq != seq {
-                    continue;
-                }
-
-                if header.is_error() {
-                    let err = NlMsgError::from_bytes(payload)?;
-                    if !err.is_ack() {
-                        return Err(err.into_error(payload));
+                    if header.nlmsg_seq != seq {
+                        continue;
                     }
-                    continue;
+
+                    if header.is_error() {
+                        let err = NlMsgError::from_bytes(payload)?;
+                        if !err.is_ack() {
+                            return Err(err.into_error(payload));
+                        }
+                        continue;
+                    }
+
+                    if header.is_done() {
+                        done = true;
+                        break;
+                    }
+
+                    // Extract nfgenmsg family from the payload
+                    if payload.len() >= NFGENMSG_HDRLEN {
+                        let family = payload[0];
+                        results.push((family, payload[NFGENMSG_HDRLEN..].to_vec()));
+                    }
                 }
 
-                if header.is_done() {
-                    done = true;
+                if done {
                     break;
                 }
-
-                // Extract nfgenmsg family from the payload
-                if payload.len() >= NFGENMSG_HDRLEN {
-                    let family = payload[0];
-                    results.push((family, payload[NFGENMSG_HDRLEN..].to_vec()));
-                }
             }
 
-            if done {
-                break;
-            }
-        }
-
-        Ok(results)
+            Ok(results)
+        })
+        .await
     }
 }
 

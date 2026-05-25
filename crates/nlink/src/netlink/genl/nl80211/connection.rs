@@ -589,68 +589,78 @@ impl Connection<Nl80211> {
 
     /// Collect all responses from a dump request.
     async fn collect_dump_responses(&self, seq: u32) -> Result<Vec<Vec<u8>>> {
-        let mut results = Vec::new();
+        // Plan 172 — wrap the recv loop in the Connection-level
+        // operation timeout (Plan 171 default: 30s).
+        self.with_timeout(async {
+            let mut results = Vec::new();
 
-        loop {
-            let data: Vec<u8> = self.socket().recv_msg().await?;
-            let mut done = false;
+            loop {
+                let data: Vec<u8> = self.socket().recv_msg().await?;
+                let mut done = false;
 
-            for msg_result in MessageIter::new(&data) {
-                let (header, payload) = msg_result?;
+                for msg_result in MessageIter::new(&data) {
+                    let (header, payload) = msg_result?;
 
-                if header.nlmsg_seq != seq {
-                    continue;
-                }
-
-                if header.is_error() {
-                    let err = NlMsgError::from_bytes(payload)?;
-                    if !err.is_ack() {
-                        return Err(err.into_error(payload));
+                    if header.nlmsg_seq != seq {
+                        continue;
                     }
-                    continue;
+
+                    if header.is_error() {
+                        let err = NlMsgError::from_bytes(payload)?;
+                        if !err.is_ack() {
+                            return Err(err.into_error(payload));
+                        }
+                        continue;
+                    }
+
+                    if header.is_done() {
+                        done = true;
+                        break;
+                    }
+
+                    results.push(payload.to_vec());
                 }
 
-                if header.is_done() {
-                    done = true;
+                if done {
                     break;
                 }
-
-                results.push(payload.to_vec());
             }
 
-            if done {
-                break;
-            }
-        }
-
-        Ok(results)
+            Ok(results)
+        })
+        .await
     }
 
     /// Wait for an ACK response.
     async fn wait_ack(&self, seq: u32) -> Result<()> {
-        loop {
-            let data: Vec<u8> = self.socket().recv_msg().await?;
+        // Plan 172 — wrap the recv loop in the Connection-level
+        // operation timeout (Plan 171 default: 30s).
+        self.with_timeout(async {
+            loop {
+                let data: Vec<u8> = self.socket().recv_msg().await?;
 
-            for msg_result in MessageIter::new(&data) {
-                let (header, payload) = msg_result?;
+                for msg_result in MessageIter::new(&data) {
+                    let (header, payload) = msg_result?;
 
-                if header.nlmsg_seq != seq {
-                    continue;
-                }
+                    if header.nlmsg_seq != seq {
+                        continue;
+                    }
 
-                if header.is_error() {
-                    let err = NlMsgError::from_bytes(payload)?;
-                    if err.is_ack() {
+                    if header.is_error() {
+                        let err = NlMsgError::from_bytes(payload)?;
+                        if err.is_ack() {
+                            return Ok(());
+                        }
+                        return Err(err.into_error(payload));
+                    }
+
+                    if header.is_done() {
                         return Ok(());
                     }
-                    return Err(err.into_error(payload));
-                }
-
-                if header.is_done() {
-                    return Ok(());
                 }
             }
-        }
+        })
+        .await
     }
 
     /// Resolve interface name to ifindex via dump.

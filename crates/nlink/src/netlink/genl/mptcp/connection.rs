@@ -467,41 +467,46 @@ impl Connection<Mptcp> {
         let msg = builder.finish();
         self.socket().send(&msg).await?;
 
-        let mut responses = Vec::new();
+        // Plan 172 — wrap the recv loop in the Connection-level
+        // operation timeout (Plan 171 default: 30s).
+        self.with_timeout(async {
+            let mut responses = Vec::new();
 
-        loop {
-            let data: Vec<u8> = self.socket().recv_msg().await?;
-            let mut done = false;
+            loop {
+                let data: Vec<u8> = self.socket().recv_msg().await?;
+                let mut done = false;
 
-            for result in MessageIter::new(&data) {
-                let (header, payload) = result?;
+                for result in MessageIter::new(&data) {
+                    let (header, payload) = result?;
 
-                if header.nlmsg_seq != seq {
-                    continue;
-                }
-
-                if header.is_error() {
-                    let err = NlMsgError::from_bytes(payload)?;
-                    if !err.is_ack() {
-                        return Err(err.into_error(payload));
+                    if header.nlmsg_seq != seq {
+                        continue;
                     }
-                    continue;
+
+                    if header.is_error() {
+                        let err = NlMsgError::from_bytes(payload)?;
+                        if !err.is_ack() {
+                            return Err(err.into_error(payload));
+                        }
+                        continue;
+                    }
+
+                    if header.is_done() {
+                        done = true;
+                        break;
+                    }
+
+                    responses.push(payload.to_vec());
                 }
 
-                if header.is_done() {
-                    done = true;
+                if done {
                     break;
                 }
-
-                responses.push(payload.to_vec());
             }
 
-            if done {
-                break;
-            }
-        }
-
-        Ok(responses)
+            Ok(responses)
+        })
+        .await
     }
 
     /// Process a GENL response, checking for errors.
