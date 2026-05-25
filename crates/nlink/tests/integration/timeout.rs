@@ -1,13 +1,18 @@
-//! Integration tests for operation timeouts (Plan 032).
+//! Integration tests for operation timeouts (Plan 032; updated for
+//! Plan 171's default-30s change in 0.17).
 
 use std::time::Duration;
 
 use nlink::{Route, netlink::Connection};
 
 #[tokio::test]
-async fn test_no_timeout_default() {
+async fn test_default_timeout_is_30s() {
+    // Plan 171: every fresh Connection ships with a 30s default
+    // operation timeout. The pre-Plan-171 assertion was
+    // `None` — flipped here as part of the 0.17 cycle's
+    // "close the hidden hang class" theme.
     let conn = Connection::<Route>::new().unwrap();
-    assert_eq!(conn.get_timeout(), None);
+    assert_eq!(conn.get_timeout(), Some(Duration::from_secs(30)));
 }
 
 #[tokio::test]
@@ -51,11 +56,14 @@ async fn test_very_short_timeout() -> nlink::Result<()> {
 }
 
 #[tokio::test]
-async fn test_no_timeout_works() -> nlink::Result<()> {
+async fn test_explicit_no_timeout_works() -> nlink::Result<()> {
     require_root!();
 
-    // Default no-timeout should work fine
-    let conn = Connection::<Route>::new()?;
+    // Plan 171: opt out of the default 30s. Real ops still
+    // succeed; this test asserts that .no_timeout() doesn't
+    // break anything (the lib's recv loop runs without the
+    // tokio::time::timeout wrap when timeout is None).
+    let conn = Connection::<Route>::new()?.no_timeout();
     let links = conn.get_links().await?;
     assert!(!links.is_empty());
 
