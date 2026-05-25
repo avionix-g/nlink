@@ -4,6 +4,33 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Changed
+
+- **CI observability (Plan 174)** — three related improvements
+  so the next hidden hang takes 1 CI iteration to diagnose
+  instead of 3:
+  - `nlink::lab::init_test_tracing()` (lab-feature only) wires a
+    libtest-friendly `tracing-subscriber` honoring `RUST_LOG`.
+    Auto-invoked by `nlink::require_root!()` /
+    `require_root_void!()` so every integration test path emits
+    the lib's `#[tracing::instrument]` spans without per-test
+    boilerplate. The integration CI job sets
+    `RUST_LOG=nlink=debug,nlink::netlink::nftables=trace` so a
+    hang surfaces which method was in flight at the failure
+    point.
+  - `.github/workflows/integration-tests.yml` modprobes
+    `nf_tables` + `nf_flow_table` explicitly (previously relied
+    on kernel auto-load; documents intent + survives locked-down
+    containers).
+  - `crates/nlink/tests/integration/IGNORED.md` catalogs every
+    `#[ignore]`'d test (16 total) with reason category +
+    tracking plan; `scripts/audit-ignored-tests.sh`
+    (wired into rust.yml as `audit-ignored-tests`) fails on any
+    new ignore missing a catalog entry. Plan 174 §7 notes the
+    12 `diagnostics.rs` "migration candidate" rows — a future
+    bulk swap of `#[ignore]` → `nlink::require_root!()` so they
+    run for real in CI.
+
 ## [0.16.0] - 2026-05-25
 
 > See [`docs/migration_guide/0.15.1-to-0.16.0.md`](docs/migration_guide/0.15.1-to-0.16.0.md)
