@@ -84,23 +84,42 @@ two things is wrong:
 
 ## 3. Investigation plan
 
-### Phase 1 — log the actual byte sequences
+### Phase 1 — log the actual byte sequences ✅ (landed)
 
-Add a temporary `tracing::debug!` to the comparison site:
+`tracing::trace!` instrumentation at the diff comparison site
+in `crates/nlink/src/netlink/nftables/config/diff.rs` emits
+both the declared-side and kernel-side hex dumps every time a
+keyed-rule comparison flags a divergence:
 
 ```rust
-tracing::debug!(
+tracing::trace!(
+    table = %declared.name(),
+    chain = chain_name,
+    key,
     declared_len = declared_body.len(),
     kernel_len = kr.expression_bytes.len(),
-    declared_hex = ?hex::encode(&declared_body),
-    kernel_hex = ?hex::encode(&kr.expression_bytes),
-    "diff body-bytes comparison"
+    declared_hex = %hex_dump(&declared_body),
+    kernel_hex = %hex_dump(&kr.expression_bytes),
+    "diff body-bytes divergence (Plan 178)"
 );
 ```
 
-(Plan 174 will land the `tracing-subscriber` init that makes
-this visible in CI. Until then, add the same instrumentation
-via `eprintln!` in the failing test for one CI iteration.)
+The instrumentation is silent on CI today because the three
+tests that exercise this path are still `#[ignore]`'d. To
+capture the bytes, an investigator un-ignores one (locally with
+sudo or in a one-off CI iteration) under
+`RUST_LOG=nlink::netlink::nftables=trace`. Plan 174's libtest
+subscriber + the CI `RUST_LOG` env make it visible in the run
+log.
+
+Quickstart (locally, on any kernel with nf_tables):
+
+```bash
+sudo RUST_LOG=nlink::netlink::nftables=trace \
+    cargo test -p nlink --features lab --test integration -- \
+        --ignored reconcile_idempotent_reapply_yields_empty_diff \
+        --nocapture --test-threads=1
+```
 
 ### Phase 2 — diff the byte sequences
 

@@ -10,6 +10,21 @@ use crate::netlink::{
     builder::MessageBuilder, connection::Connection, error::Result, protocol::Nftables,
 };
 
+/// One-line hex dump used by the Plan 178 diagnostic trace.
+/// Kept small + dependency-free.
+struct HexDump<'a>(&'a [u8]);
+impl std::fmt::Display for HexDump<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        for b in self.0 {
+            write!(f, "{:02x}", b)?;
+        }
+        Ok(())
+    }
+}
+fn hex_dump(bytes: &[u8]) -> HexDump<'_> {
+    HexDump(bytes)
+}
+
 /// Render the declared `Rule`'s expression list to the same byte
 /// shape the kernel returns in `NFTA_RULE_EXPRESSIONS` (the
 /// nested elem-list inner bytes, *not* including the outer
@@ -376,6 +391,22 @@ impl NftablesConfig {
                             let declared_body =
                                 lower_to_expression_bytes(&declared_rule.body);
                             if declared_body != kr.expression_bytes {
+                                // Plan 178 diagnostic — surface the
+                                // exact divergence so the fix can be
+                                // narrowed. Goes through the lib's
+                                // `#[tracing::instrument]` channel
+                                // so CI's `RUST_LOG=…=trace` (Plan
+                                // 174) makes it visible.
+                                tracing::trace!(
+                                    table = %declared.name(),
+                                    chain = chain_name,
+                                    key,
+                                    declared_len = declared_body.len(),
+                                    kernel_len = kr.expression_bytes.len(),
+                                    declared_hex = %hex_dump(&declared_body),
+                                    kernel_hex = %hex_dump(&kr.expression_bytes),
+                                    "diff body-bytes divergence (Plan 178)"
+                                );
                                 diff.rules_to_replace.push((
                                     declared.name().to_string(),
                                     declared.family(),
