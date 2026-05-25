@@ -260,5 +260,5 @@ reference implementations.
   `__rt` runtime substrate documentation.
 - `nlink-macros` crate README — versioning / publish-order
   guarantees vs nlink proper.
-- Plan 154 ([`plans/154-0.16-nlink-macros-plan.md`](../../plans/154-0.16-nlink-macros-plan.md))
-  — design rationale + comparison vs neli's macro story.
+- `CHANGELOG.md ## [0.16.0]` (`nlink-macros` section) — design
+  rationale + comparison vs neli's macro story.

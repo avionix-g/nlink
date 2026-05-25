@@ -4,7 +4,7 @@ from: 0.16 cut CI evidence (2026-05-25)
 subject: `Connection::<Nftables>::send_batch` hangs in GHA container — root-cause + fix
 status: proposed for 0.17 — 7 Plan 166 reconcile tests `#[ignore]`'d in 0.16 with this plan as the unblock
 target version: 0.17.0
-parent: 167-0.16-cut-activation-plan.md (Phase 3 step C closeout)
+parent: 177-0.17-master-plan.md
 source: CI run 26405827382 (commit 012a8aa) — diagnostic suite localized the hang
 created: 2026-05-25
 ---

@@ -392,10 +392,9 @@ nl80211,devlink,dpll,net_shaper}.rs`, `macros/define_taskstats.rs`,
 `{audit,bridge,config,connector,diagnostics,events,fib_lookup,
 impair,lab,namespace,nftables,ratelimit,route,selinux,sockdiag,
 uevent,xfrm}/`. Read these directly when learning a subsystem;
-registered examples are kept current (see
-[Plan 160](plans/160-example-registry-audit.md) for the 9 known
-orphan files behind a CI gate; they're catalogued for
-maintainer-paced triage).
+every shipped example is registered + builds clean under
+`cargo build --workspace --all-targets` (the
+`audit-example-registration` CI gate enforces zero orphans).
 
 **Convention — every example .rs MUST be registered in
 `crates/nlink/Cargo.toml`.** Cargo only auto-discovers examples
@@ -403,105 +402,26 @@ at the top level of `examples/`; any file in a subdirectory
 (`examples/route/foo.rs`, `examples/genl/bar.rs`, …) is invisible
 to `cargo build --workspace --all-targets` unless declared as an
 `[[example]] name=… path=…` block. Skipping the registration means
-the example bit-rots silently against API changes — surfaced by
-[Plan 160](plans/160-example-registry-audit.md) which catalogues
-9 such orphans found during the 0.16 cycle. `scripts/audit-
-example-registration.sh` enforces the convention; run it locally
-before merging a new example.
+the example bit-rots silently against API changes.
+`scripts/audit-example-registration.sh` enforces the convention;
+run it locally before merging a new example.
 
 ## Active work
 
-The **0.16 cycle is mid-flight** on the `0.16` branch (do not push
-to master). Plans live in [`plans/`](plans/) with
+**0.16.0 shipped 2026-05-25** (`v0.16.0` tagged; both crates on
+crates.io). The cycle's headline additions are documented in
+`CHANGELOG.md ## [0.16.0]` + `docs/migration_guide/0.15.1-to-0.16.0.md`
+— the cycle's per-plan scaffolding was deleted post-cut per
+convention.
+
+The **0.17 cycle is in flight** on the `0.17` branch (do not push
+to master). Active plans live in [`plans/`](plans/) with
 [`plans/INDEX.md`](plans/INDEX.md) as the day-to-day status
-tracker. Headlines that landed so far:
-
-- **Plan 154 — `nlink-macros` proc-macro crate** (🟢 all 7 main
-  phases + Phase 8.1-8.5 done). Downstream code declares a
-  complete custom GENL family + typed request/response in ~30
-  lines via `#[genl_family(...)]` + `#[derive(GenlMessage)]` +
-  `#[derive(GenlCommand/GenlAttribute/GenlEnum/NetlinkAttrs)]` +
-  `Connection::<F>::send_typed(req).await?`. Field types now
-  cover: primitives + `Option<T>` + `Vec<u8>` + `Vec<GenlEnum>`
-  + bitflags newtypes + `Option<GenlEnum>` + nested attribute
-  groups via `nested` hint. See
-  [`docs/recipes/define-your-own-genl-family.md`](docs/recipes/define-your-own-genl-family.md)
-  + [`crates/nlink/examples/macros/define_taskstats.rs`](crates/nlink/examples/macros/define_taskstats.rs).
-- **Plan 149 — streaming dump API** (🟢): `dump_stream<T>` +
-  `dump_stream_with_body<T>` (caller-parameterized body) +
-  typed wrappers for links/routes/neighbors/addresses + qdiscs/
-  classes/filters + XFRM SAs/SPs (`stream_sas`/`stream_sps`) +
-  conntrack (`stream_conntrack` / `_v4` / `_v6`) +
-  nft-rules (`stream_rules(table, family)`). O(1) memory
-  iteration over BGP/conntrack/IPsec/nft-scale dumps. The
-  `_with_body` extension reuses each family's existing
-  payload parser (parse_conntrack_body, parse_rule, etc.) so
-  one parser per kind serves eager / multicast / streaming
-  paths.
-- **Plan 150 — nftables flowtable** (🟢): full CRUD + multicast
-  events (`Connection::<Nftables>::subscribe` + 8 typed event
-  variants). §9.1 counters introspection formally closed —
-  kernel UAPI premise was wrong (per-flow counters live in
-  conntrack via `CTA_COUNTERS_*`, not in `NFT_MSG_GETFLOWTABLE`);
-  the `stream_conntrack` + `ConntrackStatus::OFFLOAD`/`HW_OFFLOAD`
-  filter pattern is documented in the nftables-stateful-fw recipe.
-- **Plan 151 — ENOBUFS resync** (🟢): `ResyncedEvent<T>` +
-  `ResyncMarker` + recipe shipped earlier; the pre-baked
-  `events_with_resync<S, T, F>` Stream wrapper + `ResyncStream`
-  state machine (`Forwarding` → `RunningSnapshot` → `Replaying`
-  → `Done`) landed in the 2026-05-25 pre-cut audit window. 6
-  unit tests cover pass-through, ENOBUFS+replay, empty-snapshot
-  markers, error fusing, snapshot failure, multiple recoveries.
-- **Plan 153 — kernel feature bundle** (🟢): all three sub-features
-  shipped (§4.1 XFRM IPsec offload + §4.2 Devlink rate +
-  port-function-state + §4.3 `net_shaper` GENL family — second
-  in-tree macro dogfood after DPLL).
-- **Plan 157 — declarative `NftablesConfig`** (🟢): diff + atomic
-  apply via the extended `Transaction` + `apply_reconcile(opts)`
-  + recipe + **per-rule USERDATA-keyed reconciliation identity**
-  (Plan 157b v2 — replaced original §4.3 typed-Match
-  canonicalization design after research showed
-  kube-proxy/Google nftables/etc. all use USERDATA comment-
-  tagging, not canonicalization). `DeclaredRule::handle_key`
-  round-trips as `NFTA_RULE_USERDATA = "nlink:<key>"`; diff
-  matches by key + body-bytes, emits `Transaction::replace_rule`
-  (NLM_F_REPLACE) for in-place body updates. NetworkConfig-
-  symmetric per-rule diff granularity. Sets/maps deferred per
-  original plan scope.
-- **Plan 158 — `syscall_batch` feature** (🟢 opt-in): `recvmmsg` /
-  `sendmmsg` batching wired into both eager dumps + streaming.
-- **Plan 159 — `ConnectionPool<P>`** (🟢): bounded-mpsc-channel-
-  backed pool for parallel fanout.
-- **Plan 156 — DPLL family** (🟢): first in-tree dogfood of the
-  macros. All 6 phases landed — `Connection<Dpll>` with
-  `get/dump/set_*` for devices and pins (all 11 typed enums +
-  nested groups + bitflags), push-based multicast monitor
-  (`subscribe_monitor()` + `DpllEvent` via `EventSource`),
-  recipe + example. ~430 lines of declarative Rust for the full
-  family vs ~600+ lines hand-written. Phase 5 closeout also
-  shipped **shared GENL multicast-group infrastructure**:
-  `__rt::resolve_genl_family_with_groups` +
-  `GenlFamily::mcast_group(name)` +
-  `Connection::<F: GenlFamily>::subscribe_group(name)`.
-  Devlink/Nl80211/Ethtool refactored to use it (−254 lines of
-  duplicated wire parsing).
-
-Pre-cut audit (2026-05-25) added Plans 161-166 — all 🟢:
-- **161** — 4 example companions for headline 0.16 features.
-- **162** — `PooledConnection::invalidate` consume-self (compile
-  error replaces runtime panic).
-- **163** — `#[non_exhaustive]` on 9 new-in-0.16 pub structs
-  (`ReconcileOptions` is now builder-only).
-- **164** — `NftablesConfig::diff` hoists `list_chains()` +
-  `list_flowtables()` out of the table loop (O(N²+N·R) → O(N+R)).
-- **165** — 5 doc-currency cleanups.
-- **166** — 20 root-gated integration tests across 6 new files
-  (~470 LOC) — ship in 0.16, run under privileged CI once
-  Plan 140 lands.
-
-Ready to start (no blockers): Plan 152 (aya/Prometheus/OTel
-showcases — both DPLL and net_shaper now in tree as macro
-reference points). Currently deprioritized per maintainer.
+tracker. Cycle theme: close the "hidden hang" class of bugs that
+the 0.16 CI evidence surfaced, plus sweep up the ergonomic +
+tooling papercuts the cycle revealed. See
+[`plans/177-0.17-master-plan.md`](plans/177-0.17-master-plan.md)
+for the cycle's narrative + sequencing.
 
 Per-release upgrade guides:
 [`docs/migration_guide/`](docs/migration_guide/README.md) — write
