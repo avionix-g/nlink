@@ -20,7 +20,8 @@ design plan and lives at
 ## Quick status
 
 - **Cycle**: 0.17.0 — branched from master (= 0.16.0 head)
-  2026-05-25.
+  2026-05-25; **cycle work complete 2026-05-25**, awaiting
+  maintainer cut.
 - **Branch**: all 0.17 work pushes to the `0.17` branch.
   Cycle cut → master merge happens at release time. **Do not
   push to master.**
@@ -29,9 +30,12 @@ design plan and lives at
   tuple shape are the cycle's first semver-major API breaks;
   Plan 171's default-timeout was behavior-only, didn't trigger
   the bump).
-- **CI**: a new draft PR `0.17 → master` will drive CI on
-  every push (same workflow as the 0.16 cycle's PR #3 —
-  GitHub Actions only triggers on master push/PR).
+- **Migration guide**:
+  [`docs/migration_guide/0.16.0-to-0.17.0.md`](../docs/migration_guide/0.16.0-to-0.17.0.md)
+  written.
+- **CI**: PR #4 (draft, `0.17 → master`) — every push triggers
+  the full workflow; all 11 jobs green on the cycle-close commit.
+- **Cut**: run `scripts/cut-release.sh 0.17.0` when ready.
 
 ## Status legend
 
@@ -62,6 +66,12 @@ sequencing rationale, scope boundaries.
 Total 0.17 focused-work estimate: **~13 hours** + CI cycle
 time + migration-guide write-up for the 0.16.0 → 0.17.0
 transition.
+
+## Post-0.17 follow-ups (queued)
+
+| Plan | Title | Notes |
+|------|-------|-------|
+| [179](179-diagnostics-tests-migrate-to-require-root-plan.md) | Migrate 12 `#[ignore]`'d `diagnostics.rs` tests to `nlink::require_root!()` | Surfaced by Plan 174 §7. Mechanical bulk pass; may surface latent test failures (these tests have never run). ~1-3 h. |
 
 ## Deprioritized (parked)
 

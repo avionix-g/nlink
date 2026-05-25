@@ -98,8 +98,9 @@ Ship §3.3 only:
 - CHANGELOG entries for any unverified-by-CI feature get an
   explicit "manually validated 2026-XX-XX against $HARDWARE"
   footnote so users can see the coverage shape.
-- Plans 178+ enumerate §3.1/§3.2 paths in case future demand
-  warrants them.
+- Plans 180+ enumerate §3.1/§3.2 paths in case future demand
+  warrants them (note: Plan 178 was taken by the body-bytes
+  diff fix in this cycle; renumbered to avoid collision).
 
 ## 5. Acceptance criteria
 
@@ -134,9 +135,17 @@ Ship §3.3 only:
 
 ## 8. Out-of-scope follow-ups
 
-- **Plan 178** — self-hosted hardware runner (§3.1).
-- **Plan 179** — vendor cloud lab cycle (§3.2).
+- **Plan 180** — self-hosted hardware runner (§3.1). Open
+  when a downstream adopter signals critical-infrastructure
+  use.
+- **Plan 181** — vendor cloud lab cycle (§3.2). Open if a
+  hardware-touching regression escapes the manual checklist
+  in a future cycle.
 - **NIC emulation** (e.g., QEMU virtio-net with `flow_offload`
   patch) — research path, not a near-term plan.
+
+(Note: Plan 178 was claimed by the body-bytes diff fix in this
+cycle, and Plan 179 — see below — covers the diagnostics.rs
+migration surfaced by Plan 174.)
 
 End of plan.
