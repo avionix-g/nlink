@@ -88,6 +88,9 @@ mod streaming;
 #[path = "integration/flowtable.rs"]
 mod flowtable;
 
+#[path = "integration/nftables_diag.rs"]
+mod nftables_diag;
+
 #[path = "integration/nftables_reconcile.rs"]
 mod nftables_reconcile;
 
