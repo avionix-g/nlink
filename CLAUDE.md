@@ -326,7 +326,64 @@ Specific not-found cases get typed variants
 Kernel errors carry `KernelWithContext` (operation name + args +
 errno), so messages read like `"add_link(veth0, kind=veth): File
 exists (errno 17)"`. Operation timeouts are opt-in via
-`Connection::timeout(Duration)`; default is none.
+`Connection::timeout(Duration)`; default is none (Plan 171 is the
+0.17 work item to make this 30s by default).
+
+## Recv-loop shape (canonical)
+
+Every netlink response-reading loop in the lib follows the same
+shape. Two structural requirements every new loop MUST meet —
+both surfaced by the 0.16 cycle's CI hang (`send_batch` lacked
+the seq filter; took 22 min of GHA wall-clock + 3 push-iterations
+to localize):
+
+1. **Filter by `nlmsg_seq`** before any other check. The kernel
+   may deliver stale responses from earlier requests on the same
+   fd, or multicast notifications interleaved with unicast
+   replies. `if header.nlmsg_seq != seq { continue; }` is
+   mandatory.
+2. **Terminate on the right marker.** Dumps terminate on
+   `NLMSG_DONE`. Batch commits (`NFNL_MSG_BATCH_*`) terminate
+   on the **BATCH_END's ACK specifically** — not the first
+   per-op ACK, which can fire mid-batch and leave the loop
+   thinking the batch is done.
+
+Canonical template:
+
+```rust
+let seq = self.socket().next_seq();
+// ... build + send request, tracking start/end seqs for batches ...
+
+loop {
+    let data = self.recv_with_timeout().await?;   // Plan 171: 30s default
+    let mut done = false;
+    for msg in MessageIter::new(&data) {
+        let (header, payload) = msg?;
+        if header.nlmsg_seq != seq {              // (1) seq filter
+            continue;
+        }
+        if header.is_error() {
+            let err = NlMsgError::from_bytes(payload)?;
+            if err.is_ack() {
+                // For batch commits: return only on the
+                // BATCH_END seq's ACK; per-op ACKs continue.
+                done = true;
+                break;
+            }
+            return Err(err.into_error(payload));
+        }
+        if header.is_done() {                     // (2) end marker
+            done = true;
+            break;
+        }
+        // ... accumulate payload ...
+    }
+    if done { break; }
+}
+```
+
+Plan 172 enforces this template across all 9 recv-loops in the
+lib. The audit table is in Plan 172 §2.1.
 
 ## Observability
 
@@ -445,3 +502,19 @@ cargo publish -p nlink-macros
 # wait ~30s for crates.io to index
 cargo publish -p nlink
 ```
+
+**Dry-run gotcha**: `cargo publish -p nlink --dry-run` will FAIL
+unless the matching `nlink-macros` version is already on
+crates.io. The dry-run checks against the live registry; the
+publish order is "macros first, then nlink." Skip the
+`nlink --dry-run`; rely on the macros dry-run + the real publish
+sequence. Plan 175 (`scripts/cut-release.sh`) bakes this in.
+
+**Plan-file cleanup**: when a cycle cuts + publishes, delete the
+per-plan scaffolding under `plans/` in a follow-up commit. The
+durable narrative lives in `CHANGELOG.md ## [X.Y.Z]` +
+`docs/migration_guide/<from>-to-<to>.md`. Keep `plans/INDEX.md`
+(rewrite for the next cycle) and any plans still in flight or
+deprioritized but not abandoned. Reference: the 0.16 → 0.17
+transition deleted 23 0.16 plans + slimmed Plan 169 to just its
+open Phase 3 (`Bottleneck::score`).
