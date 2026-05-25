@@ -396,6 +396,56 @@ pub struct Bottleneck {
     pub recommendation: String,
 }
 
+impl Bottleneck {
+    /// Normalized severity score in 0.0..=1.0. Higher = worse.
+    ///
+    /// Combines three signals with documented weights:
+    /// - `drop_rate` (weight **0.6**) — the most direct measure
+    ///   of "packets are being lost."
+    /// - Backlog pressure (weight **0.3**) — `min(current_rate
+    ///   / 1 MB, 1.0)` for `BottleneckType::{QdiscDrops,
+    ///   BufferFull}` (where `current_rate` doubles as the
+    ///   backlog proxy in the existing field set); 0 for
+    ///   other variants.
+    /// - Error rate (weight **0.1**) — `min(total_drops /
+    ///   current_rate, 1.0)` for `BottleneckType::{HardwareErrors,
+    ///   InterfaceDrops}`; 0 for other variants. Falls back to
+    ///   0 when `current_rate` is 0 (would divide by zero).
+    ///
+    /// Saturates at 1.0 in extreme cases.
+    ///
+    /// **The weights are documented rather than configurable**
+    /// (Plan 169 Phase 3 decision). For use cases that need
+    /// different weighting — e.g., a latency-sensitive RT
+    /// workload that treats any drop as critical — compute
+    /// the score yourself from the underlying fields. The lib
+    /// commits to this formula across 0.17.x; revision possible
+    /// in 0.18 if real-world signal indicates a better
+    /// combination.
+    pub fn score(&self) -> f64 {
+        let drop_component = self.drop_rate * 0.6;
+
+        let backlog_pressure = match self.bottleneck_type {
+            BottleneckType::QdiscDrops | BottleneckType::BufferFull => {
+                (self.current_rate as f64 / 1_048_576.0).min(1.0)
+            }
+            _ => 0.0,
+        };
+        let backlog_component = backlog_pressure * 0.3;
+
+        let error_component = match self.bottleneck_type {
+            BottleneckType::HardwareErrors | BottleneckType::InterfaceDrops
+                if self.current_rate > 0 =>
+            {
+                (self.total_drops as f64 / self.current_rate as f64).min(1.0) * 0.1
+            }
+            _ => 0.0,
+        };
+
+        (drop_component + backlog_component + error_component).min(1.0)
+    }
+}
+
 /// Type of bottleneck detected.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
@@ -1331,6 +1381,69 @@ mod tests {
         assert!(!empty_iface_diag(0, OperState::Up).is_operational());
         assert!(!empty_iface_diag(0x1, OperState::Down).is_operational());
         assert!(empty_iface_diag(0x1, OperState::Up).is_operational());
+    }
+
+    fn bottleneck_with(
+        bottleneck_type: BottleneckType,
+        drop_rate: f64,
+        current_rate: u64,
+        total_drops: u64,
+    ) -> Bottleneck {
+        Bottleneck {
+            location: "test".into(),
+            bottleneck_type,
+            current_rate,
+            drop_rate,
+            total_drops,
+            recommendation: String::new(),
+        }
+    }
+
+    #[test]
+    fn bottleneck_score_zero_for_empty() {
+        let b = bottleneck_with(BottleneckType::QdiscDrops, 0.0, 0, 0);
+        assert_eq!(b.score(), 0.0);
+    }
+
+    #[test]
+    fn bottleneck_score_pure_drop_rate() {
+        // drop_rate=1.0, no backlog, no errors → 0.6 (just the
+        // drop_rate weight).
+        let b = bottleneck_with(BottleneckType::QdiscDrops, 1.0, 0, 0);
+        assert!((b.score() - 0.6).abs() < 1e-9, "got {}", b.score());
+    }
+
+    #[test]
+    fn bottleneck_score_pure_backlog_on_buffer_full() {
+        // 1 MB current_rate, no drops, BufferFull → 0.3
+        // (just the backlog weight).
+        let b = bottleneck_with(BottleneckType::BufferFull, 0.0, 1_048_576, 0);
+        assert!((b.score() - 0.3).abs() < 1e-9, "got {}", b.score());
+    }
+
+    #[test]
+    fn bottleneck_score_composite_qdisc_drops() {
+        // drop_rate=0.5 → 0.30, current_rate=512 KB → backlog
+        // pressure=0.5 → 0.15. Total: 0.45.
+        let b = bottleneck_with(BottleneckType::QdiscDrops, 0.5, 524_288, 0);
+        assert!((b.score() - 0.45).abs() < 1e-9, "got {}", b.score());
+    }
+
+    #[test]
+    fn bottleneck_score_saturates_at_one() {
+        // Pathological: huge drop_rate (above 1.0 — defensive
+        // input) and huge backlog. min(...).min(1.0) saturates.
+        let b = bottleneck_with(BottleneckType::QdiscDrops, 2.0, 100_000_000, 0);
+        assert!(b.score() <= 1.0, "got {}", b.score());
+        assert!(b.score() >= 0.9, "should be near saturation: {}", b.score());
+    }
+
+    #[test]
+    fn bottleneck_score_no_backlog_component_for_unrelated_type() {
+        // RateLimited shouldn't reach into backlog or error
+        // components — only the drop_rate contributes.
+        let b = bottleneck_with(BottleneckType::RateLimited, 0.5, 1_048_576, 1000);
+        assert!((b.score() - 0.3).abs() < 1e-9, "got {}", b.score());
     }
 
     #[test]
