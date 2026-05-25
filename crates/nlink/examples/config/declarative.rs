@@ -40,10 +40,8 @@ async fn main() -> nlink::Result<()> {
     let cfg = NetworkConfig::new()
         .link("declarative_dummy0", |l| l.dummy().mtu(9000).up())
         .link("declarative_dummy1", |l| l.dummy().up())
-        .address("declarative_dummy0", "10.99.0.1/24")
-        .map_err(|e| nlink::Error::InvalidMessage(e.to_string()))?
-        .route("10.99.1.0/24", |r| r.via("10.99.0.254"))
-        .map_err(|e| nlink::Error::InvalidMessage(e.to_string()))?
+        .address("declarative_dummy0", "10.99.0.1/24")?
+        .route("10.99.1.0/24", |r| r.via("10.99.0.254"))?
         .qdisc("declarative_dummy0", |q| q.netem().delay_ms(10));
 
     // -- Step 2: diff against current kernel state ----------------
@@ -94,12 +92,9 @@ async fn main() -> nlink::Result<()> {
     let updated = NetworkConfig::new()
         .link("declarative_dummy0", |l| l.dummy().mtu(9000).up())
         .link("declarative_dummy1", |l| l.dummy().up())
-        .address("declarative_dummy0", "10.99.0.1/24")
-        .map_err(|e| nlink::Error::InvalidMessage(e.to_string()))?
-        .route("10.99.1.0/24", |r| r.via("10.99.0.254"))
-        .map_err(|e| nlink::Error::InvalidMessage(e.to_string()))?
-        .route("10.99.2.0/24", |r| r.via("10.99.0.254")) // <-- new
-        .map_err(|e| nlink::Error::InvalidMessage(e.to_string()))?
+        .address("declarative_dummy0", "10.99.0.1/24")?
+        .route("10.99.1.0/24", |r| r.via("10.99.0.254"))?
+        .route("10.99.2.0/24", |r| r.via("10.99.0.254"))? // <-- new
         .qdisc("declarative_dummy0", |q| q.netem().delay_ms(10));
     let mut_diff = updated.diff(&conn).await?;
     println!(
