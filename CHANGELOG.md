@@ -6,6 +6,31 @@ All notable changes to this project will be documented in this file.
 
 ### Added
 
+- **Plan 150 §9.1 formally closed — flowtable per-flow counters
+  via the existing `stream_conntrack` API** (no new code; the
+  original design's kernel-UAPI premise was wrong). Research
+  against `include/uapi/linux/netfilter/nf_tables.h` confirmed
+  `NFT_MSG_GETFLOWTABLE` returns only the flowtable's
+  configuration (hooks, devices, flags) — there is no per-flow
+  tuple or counter attribute. Per-flow counters live in the
+  underlying conntrack entries (kept in sync by the offload
+  fastpath when `flags counter` is set), surfaced via
+  `CTA_COUNTERS_ORIG` / `_REPLY` on the standard
+  `IPCTNL_MSG_CT_GET` dump. The `IPS_OFFLOAD_BIT` /
+  `IPS_HW_OFFLOAD_BIT` status bits identify which entries were
+  flowtable-offloaded.
+
+  No new API needed — Plan 149's `Connection::<Netfilter>::stream_conntrack`
+  + `ConntrackStatus::OFFLOAD` / `::HW_OFFLOAD` + the existing
+  `ConntrackEntry::counters_orig` / `counters_reply` fields
+  already cover the use case. `docs/recipes/nftables-stateful-fw.md`
+  gains a new "Per-flow counters for offloaded flows" section
+  documenting the pattern. See
+  [Plan 150 §9.1 closeout](plans/150-0.16-nftables-flowtable-plan.md#91-flowtable-counter-introspection--closed-without-new-api-surface)
+  for the kernel-source-cited rationale.
+
+  Closes Plan 150.
+
 - **Per-rule USERDATA-keyed reconciliation for `NftablesConfig`**
   (Plan 157b v2 — closes Plan 157 §4.3 with a different design
   than the original).

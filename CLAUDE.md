@@ -431,11 +431,13 @@ tracker. Headlines that landed so far:
   payload parser (parse_conntrack_body, parse_rule, etc.) so
   one parser per kind serves eager / multicast / streaming
   paths.
-- **Plan 150 — nftables flowtable** (🟡): full CRUD + multicast
+- **Plan 150 — nftables flowtable** (🟢): full CRUD + multicast
   events (`Connection::<Nftables>::subscribe` + 8 typed event
-  variants). Counters introspection still deferred — kernel
-  UAPI premise needs re-investigation (per-flow counters live
-  in conntrack, not in NFT_MSG_GETFLOWTABLE).
+  variants). §9.1 counters introspection formally closed —
+  kernel UAPI premise was wrong (per-flow counters live in
+  conntrack via `CTA_COUNTERS_*`, not in `NFT_MSG_GETFLOWTABLE`);
+  the `stream_conntrack` + `ConntrackStatus::OFFLOAD`/`HW_OFFLOAD`
+  filter pattern is documented in the nftables-stateful-fw recipe.
 - **Plan 151 — ENOBUFS resync types** (🟡): `ResyncedEvent<T>` +
   `ResyncMarker` + recipe. Pre-baked Stream wrapper on hold for
   design soak.
