@@ -176,8 +176,10 @@ merge_pr() {
 }
 
 tag_release() {
-    git tag -a "v$VERSION" -m "nlink $VERSION"
-    echo "Tag v$VERSION created locally (not yet pushed)."
+    # Repo convention is bare X.Y.Z (no `v` prefix) — matches every
+    # tag from 0.1.0 through 0.15.x. v0.16.0 was a one-off outlier.
+    git tag -a "$VERSION" -m "nlink $VERSION"
+    echo "Tag $VERSION created locally (not yet pushed)."
 }
 
 wait_for_macros_indexed() {
@@ -221,7 +223,7 @@ build_highlights_body() {
 The full CHANGELOG for this release is too long for a GitHub
 release body (limit: 125000 chars). Read it at:
 
-https://github.com/$repo/blob/v$VERSION/CHANGELOG.md#$(echo "$VERSION" | tr . -)---$(date +%Y-%m-%d)
+https://github.com/$repo/blob/$VERSION/CHANGELOG.md#$(echo "$VERSION" | tr . -)---$(date +%Y-%m-%d)
 
 ## Highlights
 
@@ -241,7 +243,7 @@ create_github_release() {
         echo "CHANGELOG section is ${#body} chars (> $max_len limit); using highlights body."
         body=$(build_highlights_body)
     fi
-    gh release create "v$VERSION" \
+    gh release create "$VERSION" \
         --title "nlink $VERSION" \
         --notes "$body" \
         --verify-tag
@@ -306,9 +308,9 @@ echo "Publishing nlink..."
 cargo publish -p nlink
 
 step "Phase 8 — Push tag and create GitHub release"
-git push origin "v$VERSION"
+git push origin "$VERSION"
 create_github_release
-echo "GitHub release published: https://github.com/$(gh repo view --json nameWithOwner --jq .nameWithOwner)/releases/tag/v$VERSION"
+echo "GitHub release published: https://github.com/$(gh repo view --json nameWithOwner --jq .nameWithOwner)/releases/tag/$VERSION"
 
 step "Phase 9 — Open next cycle branch"
 confirm "About to open the next cycle branch '$NEXT_CYCLE' from master"
