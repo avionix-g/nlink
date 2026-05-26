@@ -106,6 +106,20 @@ pub enum Error {
     #[error("interface error: {0}")]
     Interface(#[from] IfError),
 
+    /// Address parsing error from declarative-config builders
+    /// (e.g., `NetworkConfig::address("dev", "10.0.0.1/24")`).
+    /// Added in 0.17 (Plan 173) so callers can `?`-chain on
+    /// the builders without a per-call `.map_err()`.
+    #[error("address parse error: {0}")]
+    AddressParse(#[from] crate::netlink::config::AddressParseError),
+
+    /// Route parsing error from declarative-config builders
+    /// (e.g., `NetworkConfig::route("10.0.0.0/8", |r| ...)`).
+    /// Added in 0.17 (Plan 173) so callers can `?`-chain on
+    /// the builders without a per-call `.map_err()`.
+    #[error("route parse error: {0}")]
+    RouteParse(#[from] crate::netlink::config::RouteParseError),
+
     /// Validation errors from configuration builders.
     #[error("validation failed: {}", format_validation_errors(.0))]
     Validation(Vec<ValidationErrorInfo>),

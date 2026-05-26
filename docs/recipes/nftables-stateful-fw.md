@@ -353,11 +353,12 @@ to filter on:
   — hardware offload (the NIC handles the flow entirely; counters
   are synced from the NIC driver).
 
-The original Plan 150 §9.1 sketched a `get_flowtable_counters`
-method, but research against `include/uapi/linux/netfilter/nf_tables.h`
-confirmed nftables doesn't carry the per-flow data — closing
-this as a non-API change and pointing here is the correct shape
-([Plan 150 §9.1 closeout](../../plans/150-0.16-nftables-flowtable-plan.md#91-flowtable-counter-introspection--closed-without-new-api-surface)).
+An earlier design sketched a `get_flowtable_counters` method
+on the flowtable handle, but research against
+`include/uapi/linux/netfilter/nf_tables.h` confirmed nftables
+doesn't carry the per-flow data — per-flow counters live in
+conntrack (above), not in `NFT_MSG_GETFLOWTABLE`. See the
+`CHANGELOG.md ## [0.16.0]` entry for the closeout's reasoning.
 
 ## Caveats
 

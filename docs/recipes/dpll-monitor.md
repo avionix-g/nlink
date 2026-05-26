@@ -315,8 +315,8 @@ push for latency, polling for portability.
 - [`docs/recipes/define-your-own-genl-family.md`](define-your-own-genl-family.md)
   — DPLL is the canonical in-tree dogfood of the macro stack; the
   recipe walks through how the family is declared.
-- Plan 156 ([`plans/156-0.16-dpll-genl-family-plan.md`](../../plans/156-0.16-dpll-genl-family-plan.md))
-  — design rationale + per-phase status.
+- `CHANGELOG.md ## [0.16.0]` (DPLL section) — design rationale
+  + the macro stack the family is declared on top of.
 - Kernel docs: `Documentation/driver-api/dpll.rst` (kernel 6.7+).
 - ITU-T G.8264 §11-7 — clock quality level definitions referenced
   by `DpllClockQualityLevel`.

@@ -77,6 +77,9 @@ jobs:
             # netfilter (conntrack mutation + multicast events)
             nf_conntrack
             nf_conntrack_netlink
+            # nftables (Plan 150 flowtable + Plan 157 declarative apply)
+            nf_tables
+            nf_flow_table
             # tc qdiscs
             sch_htb sch_netem sch_tbf sch_sfq sch_prio
             sch_fq_codel sch_ingress sch_clsact sch_drr sch_qfq
@@ -106,6 +109,13 @@ jobs:
       - name: Run integration tests as root
         env:
           CARGO_TERM_COLOR: always
+          # Per Plan 174: every Connection method carries
+          # `#[tracing::instrument]` but the spans are silent
+          # without a subscriber. `require_root!()` auto-inits the
+          # subscriber via `nlink::lab::init_test_tracing`; this
+          # RUST_LOG sets the filter so a hang/assert in CI produces
+          # a span trace pinpointing which method was in flight.
+          RUST_LOG: "nlink=debug,nlink::netlink::nftables=trace"
         run: |
           # --test-threads=1 is mandatory: tests create
           # `nlink-lab-*` namespaces and the unique-name suffix

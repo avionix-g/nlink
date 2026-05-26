@@ -225,8 +225,8 @@ match conn.get_shaper(ifindex, NetShaperHandle::queue(0)).await {
 - [`docs/recipes/bidirectional-rate-limit.md`](bidirectional-rate-limit.md)
   — `tc` HTB-based rate limiting (software). Use this when the
   driver doesn't ship net-shaper support.
-- Plan 153 ([`plans/153-0.16-kernel-feature-bundle-plan.md`](../../plans/153-0.16-kernel-feature-bundle-plan.md))
-  — §4.3 design rationale.
+- `CHANGELOG.md ## [0.16.0]` (`net_shaper` section) — design
+  rationale + the macro-derived family declaration shape.
 - Kernel docs:
   [`Documentation/netlink/specs/net_shaper.yaml`](https://docs.kernel.org/userspace-api/netlink/specs.html)
   — authoritative YNL spec.

@@ -323,9 +323,42 @@ pub fn has_module(name: &str) -> bool {
     std::path::Path::new("/sys/module").join(name).exists()
 }
 
+/// Initialize a `tracing-subscriber` for integration tests.
+///
+/// Auto-invoked by [`crate::require_root!`] /
+/// [`crate::require_root_void!`] so every test path emits useful
+/// logs in CI. Honors `RUST_LOG` (default `info`). Routes through
+/// libtest's capture (`with_test_writer`) so output only prints on
+/// failure or with `--nocapture`.
+///
+/// Per Plan 174: every `Connection` method carries
+/// `#[tracing::instrument]`, but the spans are silent without a
+/// subscriber. The CI workflow for the integration job sets
+/// `RUST_LOG=nlink=debug` so a hang/assert produces a span trace
+/// pinpointing which method was in flight.
+///
+/// Safe to call multiple times — the first call wins, subsequent
+/// calls are a no-op via `Once`.
+pub fn init_test_tracing() {
+    use std::sync::Once;
+    static ONCE: Once = Once::new();
+    ONCE.call_once(|| {
+        let filter = tracing_subscriber::EnvFilter::try_from_default_env()
+            .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"));
+        let _ = tracing_subscriber::fmt()
+            .with_env_filter(filter)
+            .with_test_writer()
+            .try_init();
+    });
+}
+
 /// Macro that returns early with `Ok(())` if the current process is
 /// not running as root, useful for integration tests that need
 /// `CAP_SYS_ADMIN`.
+///
+/// Also initializes a `tracing-subscriber` (via
+/// [`crate::lab::init_test_tracing`]) so CI logs surface the spans on every
+/// `Connection` method.
 ///
 /// ```ignore
 /// #[tokio::test]
@@ -338,6 +371,7 @@ pub fn has_module(name: &str) -> bool {
 #[macro_export]
 macro_rules! require_root {
     () => {
+        $crate::lab::init_test_tracing();
         if !$crate::lab::is_root() {
             eprintln!("Skipping test: requires root");
             return Ok(());
@@ -345,11 +379,12 @@ macro_rules! require_root {
     };
 }
 
-/// Like [`require_root`] but for test functions whose return type is
-/// `()` rather than `Result<()>`.
+/// Like [`crate::require_root!`] but for test functions whose
+/// return type is `()` rather than `Result<()>`.
 #[macro_export]
 macro_rules! require_root_void {
     () => {
+        $crate::lab::init_test_tracing();
         if !$crate::lab::is_root() {
             eprintln!("Skipping test: requires root");
             return;
@@ -364,8 +399,9 @@ macro_rules! require_root_void {
 /// clean skip rather than a cryptic `is_not_supported()` error
 /// deep in the test body.
 ///
-/// Wraps [`has_module`]. Pair with [`require_root`] — the module
-/// can only be checked once the test is actually trying to run.
+/// Wraps [`has_module`]. Pair with [`crate::require_root!`] — the
+/// module can only be checked once the test is actually trying to
+/// run.
 ///
 /// ```ignore
 /// #[tokio::test]

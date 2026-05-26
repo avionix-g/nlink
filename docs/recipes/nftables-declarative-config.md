@@ -262,9 +262,10 @@ config file changes
 
 ## See also
 
-- Plan 157 ([`plans/157-0.16-nftables-declarative-config-plan.md`](../../plans/157-0.16-nftables-declarative-config-plan.md))
-  — design rationale + the per-phase status, including why
-  canonicalization is deferred.
+- `CHANGELOG.md ## [0.16.0]` (declarative-config + USERDATA-keyed
+  reconciliation sections) — design rationale, including why
+  canonicalization was redesigned to comment-tagging
+  (matches kube-proxy / Google nftables / libnftnl precedent).
 - [`crates/nlink/src/netlink/nftables/config/`](../../crates/nlink/src/netlink/nftables/config/) —
   source of `NftablesConfig`, `NftablesDiff`, the diff algorithm,
   and `apply_reconcile`.

@@ -4,6 +4,196 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.17.0] - 2026-05-26
+
+### Breaking changes
+
+- **`Register` discriminants changed (Plan 178)** — switched
+  from `NFT_REG32_xx` (`8..=11`, 4-byte register aliases) to the
+  canonical `NFT_REG_x` form (`1..=4`, 16-byte registers).
+  Downstream code that cast `Register::R0 as u32` and stored
+  the literal value `8` will see `1` instead. The lib's
+  wire-format behavior is unchanged from the kernel's
+  perspective — the kernel canonicalizes both forms to
+  `NFT_REG_1` internally — but anyone matching the raw integer
+  needs an audit. Enum now carries `#[repr(u32)]`, locking the
+  memory layout so the `as u32` cast is well-defined.
+
+- **`NftablesDiff::rules_to_delete` tuple shape**: changed
+  from `Vec<(String, Family, RuleHandle)>` to
+  `Vec<(String, Family, String, RuleHandle)>` — the chain name
+  is now carried explicitly. The kernel rejects a `DELRULE`
+  with an empty `NFTA_RULE_CHAIN` even when
+  `NFTA_RULE_HANDLE` pins the rule, contrary to an earlier
+  assumption. Plan 178 closeout.
+
+### Fixed
+
+- **`Connection::send_request` / `send_ack` no longer error
+  when the socket is also subscribed to multicast groups** —
+  both recv paths did a single `recv_msg()` and bailed if the
+  returned frame happened to carry only multicast events
+  (`seq=0`) instead of the unicast ACK to the just-sent
+  request. They now loop on `recv_msg()` until a frame with a
+  matching seq arrives, ignoring unrelated multicast events
+  along the way. Same canonical shape Plan 172 enforced on the
+  dump-loops; the 30s default operation timeout (Plan 171)
+  bounds the loop. Affected the rare pattern of issuing
+  unicast requests on a `Connection` that's also `subscribe`'d
+  to a group the request mutates (e.g. an event-monitor
+  connection that also creates the interface it's about to
+  observe).
+
+- **`Connection::<Nftables>::send_batch` no longer hangs on a
+  missing batch-end ACK (Plan 170)** — the recv-loop didn't
+  filter by `nlmsg_seq` and terminated on the first per-op ACK
+  rather than the BATCH_END's ACK. A sequence-skew on the GHA
+  `rust:bookworm` container surfaced this as a 22-minute hang
+  on the 0.16 cut CI. Fix: seq-filter + end-seq termination +
+  `NLM_F_ACK` on `NFNL_MSG_BATCH_END`. The canonical
+  recv-loop shape is now documented in CLAUDE.md and audited
+  across all 9 lib recv-loops (see Plan 172 under "Changed").
+  Un-ignored 4 of the 7 `nftables_reconcile::*` tests this
+  blocked; the remaining 3 became Plan 178.
+
+- **`NftablesConfig::diff` body-bytes false-positive (Plan 178)**
+  — keyed rules were flagged as `to_replace` on every idempotent
+  re-diff, churning kernel state on every reapply for any caller
+  of the declarative-config reconcile loop. Three coordinated
+  fixes (see "Breaking changes" above for the two API-level
+  ones; the third is the diff-path internal):
+  - **`normalize_tlv` in the diff path**: walks both sides of
+    the comparison as TLV trees, strips `NLA_F_NESTED` (`0x8000`)
+    and `NLA_F_NET_BYTEORDER` (`0x4000`) hint bits, and sorts
+    sibling attributes by type at every depth. Closes the
+    writer-vs-kernel divergence on the NESTED bit (writer set
+    it on every nest; kernel doesn't on its outgoing
+    serialization) and intra-nest attribute ordering (writer
+    emits in source order; kernel in canonical numeric order).
+  - Un-ignored 3 `nftables_reconcile::*` tests (idempotent
+    reapply, replace, delete) that were `#[ignore]`'d under
+    Plan 178 tracking. They now exercise the full diff +
+    apply + re-diff cycle including delete-by-handle.
+
+### Added
+
+- **`Bottleneck::score: f64` normalized severity (Plan 169 Phase 3)**
+  — `Diagnostics::find_bottleneck()` now returns a `Bottleneck`
+  with a `score: f64` field (range 0.0..=1.0) computed from
+  `drop_rate × 0.6 + backlog_pressure × 0.3 + error_rate × 0.1`,
+  saturating at 1.0. Backlog and error components are gated on
+  the bottleneck's `BottleneckType` (only counted when
+  applicable), so a pure hardware-error bottleneck scores on
+  the error component alone. Useful for sorting multiple
+  bottlenecks by severity in a controller dashboard. 6 unit
+  tests cover empty input, pure-component scores, composite
+  scores, saturation, and type-gating.
+
+- **`From<AddressParseError>` + `From<RouteParseError>` for
+  `nlink::Error` (Plan 173)** — removes the
+  `.map_err(|e| nlink::Error::InvalidMessage(e.to_string()))?`
+  ceremony in `NetworkConfig` caller chains. The two parse-
+  error types are now `#[from]` variants on `nlink::Error`, so
+  `?` propagates them cleanly:
+
+  ```rust
+  // before
+  let addr: Address = "10.0.0.1/24"
+      .parse()
+      .map_err(|e: AddressParseError| nlink::Error::InvalidMessage(e.to_string()))?;
+  // after
+  let addr: Address = "10.0.0.1/24".parse()?;
+  ```
+
+  `examples/config/declarative.rs` updated accordingly.
+
+- **`docs/release-validation-manual.md` (Plan 176)** — pre-cut
+  hardware-validation checklist for the lib paths no CI can
+  exercise (XFRM IPsec offload, Devlink rate, Devlink port
+  function state, `net_shaper` caps). Documents per-feature
+  expected outcome + failure-mode triage. The cut script
+  (`scripts/cut-release.sh`) points at this file before the
+  irreversible publish step. Introduces the
+  `> ⚠ No CI coverage — manually validated YYYY-MM-DD against
+  > <hardware>` CHANGELOG annotation convention for future
+  hardware-only feature entries. Self-hosted-runner +
+  vendor-cloud-lab paths sketched as future plans for the day
+  a real downstream needs CI coverage on these paths.
+
+- **`scripts/cut-release.sh` (Plan 175)** — one-shot orchestrator
+  for an nlink release cut. Walks the Plan 167 sequence end-to-
+  end with confirmation prompts at the irreversible steps
+  (publish, merge, tag-push). Bakes in the three friction points
+  hit during the 0.16 cut:
+  - skips `cargo publish -p nlink --dry-run` (known false
+    negative — `nlink-macros` isn't on crates.io yet at that
+    point);
+  - automates the `## [Unreleased]` → `## [X.Y.Z] - YYYY-MM-DD`
+    CHANGELOG promotion;
+  - detects when the CHANGELOG section exceeds GitHub's 125000-
+    char release-body limit and falls back to a "highlights +
+    link to the full file" template;
+  - replaces the manual `sleep 30` after `cargo publish -p nlink-
+    macros` with a poll loop on `cargo search` (5-min cap).
+
+  Pre-flight checks: clean tree, on the cycle branch, Cargo.toml
+  version matches the arg, cargo + gh auth present.
+
+### Changed
+
+- **`Connection<P>` operations now time out after 30 s by
+  default (Plan 171)** — every `Connection<P>` method that
+  performs a netlink round-trip (every getter, setter, dump,
+  batch commit) now wraps the underlying `recv` loop in a
+  30-second `tokio::time::timeout`. Before 0.17.0, the timeout
+  was opt-in via `Connection::timeout(Duration)` and the
+  default was `None` — a kernel that never responded would hang
+  the call indefinitely. Driven by the 0.16 cut's evidence (a
+  22-minute GHA hang that should have been a clean
+  `Error::Timeout`). Override per-Connection with
+  `.timeout(Duration)`; opt out with `.no_timeout()`.
+
+  Callers whose ops legitimately take > 30 s should bump the
+  timeout explicitly via `.timeout(...)` or stream the dump in
+  chunks via the `dump_stream*` APIs (which apply the timeout
+  per-chunk, not over the whole dump).
+
+- **All 9 recv-loops in the lib routed through
+  `self.with_timeout` (Plan 172)** — the Plan 170 hang pattern
+  (no seq filter + indefinite block on missing DONE marker)
+  was audited across every lib recv-loop; 8 of 9 were already
+  structurally defensive but lacked the Plan 171 timeout
+  wrap. Sites updated: `nftables::{send_batch, nft_dump}`,
+  `genl/{wireguard, macsec, mptcp, ethtool}` dump-collection,
+  `genl/devlink` (3 loops), `genl/nl80211`
+  (`collect_dump_responses`, `wait_ack`). The canonical recv-
+  loop shape is documented in CLAUDE.md "Recv-loop shape
+  (canonical)" — required for any new loop added to the lib.
+
+- **CI observability (Plan 174)** — three related improvements
+  so the next hidden hang takes 1 CI iteration to diagnose
+  instead of 3:
+  - `nlink::lab::init_test_tracing()` (lab-feature only) wires a
+    libtest-friendly `tracing-subscriber` honoring `RUST_LOG`.
+    Auto-invoked by `nlink::require_root!()` /
+    `require_root_void!()` so every integration test path emits
+    the lib's `#[tracing::instrument]` spans without per-test
+    boilerplate. The integration CI job sets
+    `RUST_LOG=nlink=debug,nlink::netlink::nftables=trace` so a
+    hang surfaces which method was in flight at the failure
+    point.
+  - `.github/workflows/integration-tests.yml` modprobes
+    `nf_tables` + `nf_flow_table` explicitly (previously relied
+    on kernel auto-load; documents intent + survives locked-down
+    containers).
+  - `crates/nlink/tests/integration/IGNORED.md` catalogs every
+    `#[ignore]`'d test (13 total — 12 diagnostics.rs migration
+    candidates tracked by Plan 179 + 1 kernel-build-dependent
+    conntrack test) with reason category + tracking plan;
+    `scripts/audit-ignored-tests.sh` (wired into rust.yml as
+    `audit-ignored-tests`) fails on any new ignore missing a
+    catalog entry.
+
 ## [0.16.0] - 2026-05-25
 
 > See [`docs/migration_guide/0.15.1-to-0.16.0.md`](docs/migration_guide/0.15.1-to-0.16.0.md)

@@ -265,8 +265,5 @@ multi-second consumer hiccup doesn't drop events.
   the broader `is_no_buffer_space` / `is_try_again` predicate
   story
 - [`crate::netlink::resync`][resync-mod] — module docs
-- [Plan 151][plan-151] — design history; the pre-baked wrapper
-  shipped in the 2026-05-25 pre-cut audit window
 
 [resync-mod]: https://docs.rs/nlink/latest/nlink/netlink/resync/index.html
-[plan-151]: ../../plans/151-0.16-enobufs-resync-plan.md

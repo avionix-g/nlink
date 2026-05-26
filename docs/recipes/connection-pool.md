@@ -136,15 +136,11 @@ let dumps = pools.iter().enumerate().map(|(i, pool)| {
 
 - [`crate::netlink::pool` module docs][pool-docs] — full API
   details
-- [Plan 159][plan-159] — design history and the 0.17 roadmap
-  (smart health-checking, adaptive sizing, GENL family-cache
-  sharing)
 - [`docs/recipes/events-with-resync.md`][resync] — `dump_conn`
-  for Plan 151's resync helper naturally comes from a pool
+  for the resync helper naturally comes from a pool
 - [`docs/recipes/error-handling-patterns.md`][errors] — how to
   dispatch on `is_pool_exhausted` / `is_pool_closed`
 
 [pool-docs]: https://docs.rs/nlink/latest/nlink/netlink/pool/index.html
-[plan-159]: ../../plans/159-0.16-connection-pool-plan.md
 [resync]: events-with-resync.md
 [errors]: error-handling-patterns.md

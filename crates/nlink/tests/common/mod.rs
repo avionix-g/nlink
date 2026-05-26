@@ -14,9 +14,16 @@ pub fn is_root() -> bool {
 /// Skip the test if not running as root.
 ///
 /// Use this at the beginning of integration tests that require root privileges.
+///
+/// Per Plan 174 — also initializes a `tracing-subscriber` (via
+/// [`nlink::lab::init_test_tracing`]) so the lib's
+/// `#[tracing::instrument]` spans surface in CI logs. Equivalent to
+/// `nlink::require_root!()`; both paths feed through the same
+/// subscriber-init helper.
 #[macro_export]
 macro_rules! require_root {
     () => {
+        ::nlink::lab::init_test_tracing();
         if !$crate::common::is_root() {
             eprintln!("Skipping test: requires root");
             return Ok(());
@@ -28,6 +35,7 @@ macro_rules! require_root {
 #[macro_export]
 macro_rules! require_root_void {
     () => {
+        ::nlink::lab::init_test_tracing();
         if !$crate::common::is_root() {
             eprintln!("Skipping test: requires root");
             return;

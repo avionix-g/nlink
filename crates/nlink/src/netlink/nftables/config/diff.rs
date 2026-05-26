@@ -10,6 +10,121 @@ use crate::netlink::{
     builder::MessageBuilder, connection::Connection, error::Result, protocol::Nftables,
 };
 
+/// One-line hex dump used by the Plan 178 diagnostic trace.
+/// Kept small + dependency-free.
+struct HexDump<'a>(&'a [u8]);
+impl std::fmt::Display for HexDump<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        for b in self.0 {
+            write!(f, "{:02x}", b)?;
+        }
+        Ok(())
+    }
+}
+fn hex_dump(bytes: &[u8]) -> HexDump<'_> {
+    HexDump(bytes)
+}
+
+/// Normalize a netlink TLV byte stream for byte-equality
+/// comparison. Plan 178 fix — closes the false-positive class
+/// where the lib's writer-side expression bytes diverged from
+/// the kernel-echoed bytes purely on:
+///
+/// 1. `NLA_F_NESTED` (`0x8000`) bit: the lib's `nest_start`
+///    sets it on nested attribute types; the kernel's outgoing
+///    serialization of `NFTA_RULE_EXPRESSIONS` does NOT set it.
+/// 2. Attribute ordering within a nest: the kernel emits inner
+///    attributes in canonical (numeric) order; the lib's writer
+///    emits them in source order (e.g. `NFTA_META_DREG` then
+///    `NFTA_META_KEY` vs the kernel's `KEY` then `DREG`).
+///
+/// Strategy: walk the byte stream as TLVs, recursively. For each
+/// attribute, strip the `NLA_F_NESTED` bit, treat the payload as
+/// nested if and only if it parses cleanly as another TLV stream
+/// (consistent lengths, no overrun, 4-byte alignment), and at
+/// each level sort sibling attributes by type. Re-emit the
+/// canonical form. Both declared-side and kernel-side bytes go
+/// through this normalizer before the byte compare in `diff`.
+///
+/// Safe on garbage input: invalid TLV streams return the original
+/// bytes unchanged so the comparison still produces a definitive
+/// answer (different) without panicking.
+pub(crate) fn normalize_tlv(bytes: &[u8]) -> Vec<u8> {
+    match try_walk_tlvs(bytes) {
+        Some(mut attrs) => {
+            attrs.sort_by_key(|(ty, _)| *ty);
+            let mut out = Vec::with_capacity(bytes.len());
+            for (ty, payload) in &attrs {
+                emit_tlv(&mut out, *ty, payload);
+            }
+            out
+        }
+        None => bytes.to_vec(),
+    }
+}
+
+/// Walk `bytes` as a netlink TLV stream. Returns `Some(attrs)` if
+/// the entire input parses cleanly (lengths consistent, no overrun
+/// past EOF, 4-byte aligned, every payload ≥ 0). For each attribute
+/// whose payload itself parses as TLVs, recursively normalize the
+/// payload first (so siblings-at-every-depth get sorted).
+///
+/// Returns `None` if the input doesn't look like a TLV stream —
+/// `normalize_tlv` then leaves it alone.
+fn try_walk_tlvs(bytes: &[u8]) -> Option<Vec<(u16, Vec<u8>)>> {
+    if bytes.is_empty() {
+        return Some(Vec::new());
+    }
+    let mut out = Vec::new();
+    let mut pos = 0;
+    while pos < bytes.len() {
+        if pos + 4 > bytes.len() {
+            return None;
+        }
+        let len = u16::from_le_bytes([bytes[pos], bytes[pos + 1]]) as usize;
+        if len < 4 || pos + len > bytes.len() {
+            return None;
+        }
+        let raw_type = u16::from_le_bytes([bytes[pos + 2], bytes[pos + 3]]);
+        // Strip NLA_F_NESTED (0x8000) and NLA_F_NET_BYTEORDER (0x4000)
+        // hint bits — these are parser hints, not stored state, so
+        // the kernel and the lib can legitimately differ on whether
+        // they're set without the underlying attribute differing.
+        let ty = raw_type & !0xc000;
+        let payload = &bytes[pos + 4..pos + len];
+        // Recursively normalize if the payload parses as TLVs.
+        let normalized_payload = match try_walk_tlvs(payload) {
+            Some(mut inner) => {
+                inner.sort_by_key(|(t, _)| *t);
+                let mut buf = Vec::with_capacity(payload.len());
+                for (t, p) in &inner {
+                    emit_tlv(&mut buf, *t, p);
+                }
+                buf
+            }
+            None => payload.to_vec(),
+        };
+        out.push((ty, normalized_payload));
+        // 4-byte alignment.
+        let aligned = (len + 3) & !3;
+        pos += aligned;
+        if pos > bytes.len() {
+            return None;
+        }
+    }
+    Some(out)
+}
+
+fn emit_tlv(out: &mut Vec<u8>, ty: u16, payload: &[u8]) {
+    let len = (payload.len() + 4) as u16;
+    out.extend_from_slice(&len.to_le_bytes());
+    out.extend_from_slice(&ty.to_le_bytes());
+    out.extend_from_slice(payload);
+    while !out.len().is_multiple_of(4) {
+        out.push(0);
+    }
+}
+
 /// Render the declared `Rule`'s expression list to the same byte
 /// shape the kernel returns in `NFTA_RULE_EXPRESSIONS` (the
 /// nested elem-list inner bytes, *not* including the outer
@@ -56,8 +171,13 @@ pub struct NftablesDiff {
     pub chains_to_delete: Vec<(String, Family, String)>,
     /// Rules to add — paired with owning table/chain/family.
     pub rules_to_add: Vec<DeclaredRule>,
-    /// Rules to delete — kernel-assigned handles.
-    pub rules_to_delete: Vec<(String, Family, RuleHandle)>,
+    /// Rules to delete — `(table, family, chain, kernel_handle)`.
+    /// Chain is carried explicitly because the kernel rejects a
+    /// `NFT_MSG_DELRULE` with an empty `NFTA_RULE_CHAIN` even when
+    /// `NFTA_RULE_HANDLE` is supplied (returns `ENOENT`); the
+    /// earlier (table, family, handle) shape relied on a kernel
+    /// behavior that doesn't actually hold. Plan 178 closeout.
+    pub rules_to_delete: Vec<(String, Family, String, RuleHandle)>,
     /// Rules to replace in-place. Each entry is
     /// `(table, family, chain, kernel_handle, replacement)` —
     /// emits `NFT_MSG_NEWRULE | NLM_F_REPLACE | NFTA_RULE_HANDLE`
@@ -127,8 +247,8 @@ impl NftablesDiff {
                 key
             ));
         }
-        for (tbl, fam, h) in &self.rules_to_delete {
-            lines.push(format!("- rule {fam:?} {tbl} (handle={})", h.0));
+        for (tbl, fam, chain, h) in &self.rules_to_delete {
+            lines.push(format!("- rule {fam:?} {tbl}/{chain} (handle={})", h.0));
         }
         for (tbl, fam, chain, h, r) in &self.rules_to_replace {
             let key = r.handle_key().unwrap_or("<anonymous>");
@@ -373,9 +493,29 @@ impl NftablesConfig {
                             // Key matches: compare expression
                             // bytes. If different → in-place
                             // replace at the kernel handle.
-                            let declared_body =
-                                lower_to_expression_bytes(&declared_rule.body);
-                            if declared_body != kr.expression_bytes {
+                            // Plan 178 — pass both sides through
+                            // `normalize_tlv` first: strips the
+                            // `NLA_F_NESTED` hint bit and sorts
+                            // sibling attributes by type so the
+                            // writer's source-order emission and
+                            // the kernel's canonical-order echo
+                            // compare equal when they describe
+                            // the same expression list.
+                            let declared_body = normalize_tlv(
+                                &lower_to_expression_bytes(&declared_rule.body),
+                            );
+                            let kernel_body = normalize_tlv(&kr.expression_bytes);
+                            if declared_body != kernel_body {
+                                tracing::trace!(
+                                    table = %declared.name(),
+                                    chain = chain_name,
+                                    key,
+                                    declared_len = declared_body.len(),
+                                    kernel_len = kernel_body.len(),
+                                    declared_hex = %hex_dump(&declared_body),
+                                    kernel_hex = %hex_dump(&kernel_body),
+                                    "diff body-bytes divergence after normalize (Plan 178)"
+                                );
                                 diff.rules_to_replace.push((
                                     declared.name().to_string(),
                                     declared.family(),
@@ -385,7 +525,8 @@ impl NftablesConfig {
                                 ));
                             }
                             // else: no-op (declared and kernel
-                            // already agree byte-for-byte)
+                            // already agree byte-for-byte after
+                            // normalization)
                         }
                         None => {
                             // Not in kernel: add.
@@ -404,6 +545,7 @@ impl NftablesConfig {
                         diff.rules_to_delete.push((
                             declared.name().to_string(),
                             declared.family(),
+                            chain_name.to_string(),
                             RuleHandle(kr.handle),
                         ));
                     }
@@ -433,6 +575,7 @@ impl NftablesConfig {
                             diff.rules_to_delete.push((
                                 declared.name().to_string(),
                                 declared.family(),
+                                kchain_name.clone(),
                                 RuleHandle(kr.handle),
                             ));
                         }
@@ -586,5 +729,90 @@ mod tests {
         assert!(s.contains("key=ssh"), "summary missing key: {s}");
         assert_eq!(d.change_count(), 1);
         assert!(!d.is_empty());
+    }
+
+    // ---- Plan 178 — TLV normalizer + register canonicalization ----
+
+    /// Hex captured from CI on commit `a154a16` (the "Plan 178
+    /// diag" test) showing what the **kernel** echoes back via
+    /// `NFTA_RULE_EXPRESSIONS` for a `match_tcp_dport(1000).accept()`
+    /// rule. 224 bytes. The kernel form has `NLA_F_NESTED` bits
+    /// stripped, attributes sorted by type within each nest, and
+    /// canonicalized `NFT_REG_1` (1) register IDs throughout.
+    const PLAN178_KERNEL_HEX_FOR_PORT_1000: &str = "24000100090001006d6574610000000014000200080002000000001008000100000000012c00010008000100636d700020000200080001000000000108000200000000000c0003000500010006000000340001000c0001007061796c6f6164002400020008000100000000010800020000000002080003000000000208000400000000022c00010008000100636d700020000200080001000000000108000200000000000c0003000600010003e80000300001000e000100696d6d6564696174650000001c0002000800010000000000100002000c0002000800010000000001";
+
+    fn hex_decode(s: &str) -> Vec<u8> {
+        let mut out = Vec::with_capacity(s.len() / 2);
+        let bytes = s.as_bytes();
+        let mut i = 0;
+        while i + 2 <= bytes.len() {
+            let h = (bytes[i] as char).to_digit(16).unwrap();
+            let l = (bytes[i + 1] as char).to_digit(16).unwrap();
+            out.push(((h << 4) | l) as u8);
+            i += 2;
+        }
+        out
+    }
+
+    #[test]
+    fn normalize_tlv_collapses_writer_vs_kernel_to_equal() {
+        // Build the same rule the kernel fixture above represents.
+        use super::super::super::types::Rule;
+        let r = Rule::new("filter_rec", "input")
+            .match_tcp_dport(1000)
+            .accept();
+        let declared = lower_to_expression_bytes(&r);
+        let kernel = hex_decode(PLAN178_KERNEL_HEX_FOR_PORT_1000);
+
+        // Pre-normalize, the raw forms diverge (NLA_F_NESTED bits +
+        // attribute ordering). After normalize, they must match —
+        // that's the contract `NftablesConfig::diff` now relies on.
+        assert_ne!(
+            declared, kernel,
+            "raw writer-side and kernel-side bytes should differ pre-normalize"
+        );
+        let n_declared = normalize_tlv(&declared);
+        let n_kernel = normalize_tlv(&kernel);
+        assert_eq!(
+            n_declared, n_kernel,
+            "normalize_tlv must canonicalize writer-side and kernel-side bytes \
+             for the same logical rule to equal bytes"
+        );
+    }
+
+    #[test]
+    fn normalize_tlv_idempotent() {
+        let kernel = hex_decode(PLAN178_KERNEL_HEX_FOR_PORT_1000);
+        let once = normalize_tlv(&kernel);
+        let twice = normalize_tlv(&once);
+        assert_eq!(once, twice, "normalize_tlv must be idempotent");
+    }
+
+    #[test]
+    fn normalize_tlv_differs_when_values_actually_differ() {
+        // Two rules with different ports — must still diverge after
+        // normalize, otherwise the diff would silently miss real
+        // expression changes.
+        use super::super::super::types::Rule;
+        let r_a = Rule::new("filter_rec", "input").match_tcp_dport(1000).accept();
+        let r_b = Rule::new("filter_rec", "input").match_tcp_dport(9000).accept();
+        let a = normalize_tlv(&lower_to_expression_bytes(&r_a));
+        let b = normalize_tlv(&lower_to_expression_bytes(&r_b));
+        assert_ne!(a, b);
+    }
+
+    #[test]
+    fn normalize_tlv_empty_input() {
+        assert!(normalize_tlv(&[]).is_empty());
+    }
+
+    #[test]
+    fn normalize_tlv_garbage_input_passes_through() {
+        // Truncated TLV (claims len=100 in a 4-byte buffer) — bail
+        // out and return the bytes verbatim. The diff path then
+        // sees them as unequal to anything else, which is the
+        // correct conservative behavior.
+        let garbage = vec![0x64, 0x00, 0x01, 0x00];
+        assert_eq!(normalize_tlv(&garbage), garbage);
     }
 }

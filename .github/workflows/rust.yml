@@ -157,6 +157,22 @@ jobs:
       - name: Run scripts/audit-example-registration.sh
         run: bash scripts/audit-example-registration.sh
 
+  # Audit script: every `#[ignore]` in
+  # `crates/nlink/tests/integration/` MUST be catalogued in
+  # `crates/nlink/tests/integration/IGNORED.md`. Closes the gap
+  # surfaced by Plan 174: `#[ignore]` accumulates silently
+  # otherwise. New ignores either need a row in the catalog (with
+  # a reason + tracking plan) or to be replaced with
+  # `nlink::require_root!()` so they run for real in privileged
+  # CI instead of being permanently dead.
+  audit-ignored-tests:
+    name: audit ignored tests (every #[ignore] catalogued in IGNORED.md)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run scripts/audit-ignored-tests.sh
+        run: bash scripts/audit-ignored-tests.sh
+
   # No more `|| true` suppression. Plan 144 cleaned up the
   # pre-existing dead deps in bins/{ss,bridge}; if a NEW unused
   # dep lands, fail loudly so the contributor cleans up before merge.

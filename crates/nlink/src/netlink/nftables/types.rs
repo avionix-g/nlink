@@ -198,15 +198,36 @@ impl LimitUnit {
     }
 }
 
-/// nftables register (internal).
+/// nftables register, encoding the kernel UAPI register IDs from
+/// `include/uapi/linux/netfilter/nf_tables.h`.
+///
+/// The discriminants are the wire-format values; `as u32` produces
+/// the bytes the kernel stores and dumps. `#[repr(u32)]` locks the
+/// memory layout so the cast is well-defined and the size doesn't
+/// shift if the compiler changes its discriminant-sizing heuristics.
+///
+/// `R0..=R3` map to `NFT_REG_1..=NFT_REG_4` (16-byte registers).
+/// Earlier nlink used `NFT_REG32_00..=NFT_REG32_03` (`8..=11`,
+/// 4-byte registers); the kernel canonicalizes a 4-byte transfer
+/// through either form to the 16-byte register's first 4 bytes,
+/// so the stored/dumped register ID is always the `NFT_REG_x`
+/// form. Submitting in the canonical form keeps
+/// `NftablesConfig::diff` from flagging unchanged rules as
+/// `to_replace` purely on register-ID divergence. Plan 178.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u32)]
 #[non_exhaustive]
 pub enum Register {
+    /// `NFT_REG_VERDICT`. The dedicated verdict register.
     Verdict = 0,
-    R0 = 8,
-    R1 = 9,
-    R2 = 10,
-    R3 = 11,
+    /// `NFT_REG_1`. First 16-byte data register.
+    R0 = 1,
+    /// `NFT_REG_2`. Second 16-byte data register.
+    R1 = 2,
+    /// `NFT_REG_3`. Third 16-byte data register.
+    R2 = 3,
+    /// `NFT_REG_4`. Fourth 16-byte data register.
+    R3 = 4,
 }
 
 /// Comparison operator.

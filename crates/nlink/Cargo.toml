@@ -25,7 +25,10 @@ output = ["dep:serde", "dep:serde_json"]
 # Namespace watcher (inotify-based)
 namespace_watcher = ["dep:inotify"]
 # Lab / integration-test helpers (LabNamespace, with_namespace, require_root!)
-lab = []
+# Pulls in tracing-subscriber so `nlink::lab::init_test_tracing()`
+# can wire a libtest-friendly subscriber (used by `require_root!()`
+# automatically). Per Plan 174.
+lab = ["dep:tracing-subscriber"]
 # Bulk-receive via recvmmsg(2) / sendmmsg(2) — batches up to 32
 # netlink frames per syscall. ≥1.5x wall-clock speedup on
 # dump-heavy workloads (BGP route tables, conntrack tables, nft
@@ -61,6 +64,11 @@ nlink-macros = { workspace = true }
 # Optional dependencies
 serde = { workspace = true, optional = true }
 inotify = { version = "0.11", default-features = false, features = ["stream"], optional = true }
+# Pulled in by the `lab` feature so `nlink::lab::init_test_tracing()`
+# (auto-invoked by `nlink::require_root!()`) can wire a libtest-
+# friendly subscriber. Integration-test only; production consumers
+# install their own subscriber.
+tracing-subscriber = { workspace = true, optional = true }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }

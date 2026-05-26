@@ -1174,45 +1174,50 @@ impl Connection<Ethtool> {
         let msg = builder.finish();
         self.socket().send(&msg).await?;
 
-        // Receive responses until NLMSG_DONE
-        let mut result_payload: Option<Vec<u8>> = None;
+        // Plan 172 — wrap the recv loop in the Connection-level
+        // operation timeout (Plan 171 default: 30s).
+        self.with_timeout(async {
+            // Receive responses until NLMSG_DONE
+            let mut result_payload: Option<Vec<u8>> = None;
 
-        loop {
-            let data: Vec<u8> = self.socket().recv_msg().await?;
-            let mut done = false;
+            loop {
+                let data: Vec<u8> = self.socket().recv_msg().await?;
+                let mut done = false;
 
-            for msg_result in MessageIter::new(&data) {
-                let (header, payload) = msg_result?;
+                for msg_result in MessageIter::new(&data) {
+                    let (header, payload) = msg_result?;
 
-                if header.nlmsg_seq != seq {
-                    continue;
-                }
-
-                if header.is_error() {
-                    let err = NlMsgError::from_bytes(payload)?;
-                    if !err.is_ack() {
-                        return Err(err.into_error(payload));
+                    if header.nlmsg_seq != seq {
+                        continue;
                     }
-                    continue;
+
+                    if header.is_error() {
+                        let err = NlMsgError::from_bytes(payload)?;
+                        if !err.is_ack() {
+                            return Err(err.into_error(payload));
+                        }
+                        continue;
+                    }
+
+                    if header.is_done() {
+                        done = true;
+                        break;
+                    }
+
+                    // Store the first valid response payload
+                    if result_payload.is_none() {
+                        result_payload = Some(payload.to_vec());
+                    }
                 }
 
-                if header.is_done() {
-                    done = true;
+                if done {
                     break;
                 }
-
-                // Store the first valid response payload
-                if result_payload.is_none() {
-                    result_payload = Some(payload.to_vec());
-                }
             }
 
-            if done {
-                break;
-            }
-        }
-
-        result_payload.ok_or_else(|| Error::InvalidMessage("no response received".into()))
+            result_payload.ok_or_else(|| Error::InvalidMessage("no response received".into()))
+        })
+        .await
     }
 
     /// Send an ethtool SET request.

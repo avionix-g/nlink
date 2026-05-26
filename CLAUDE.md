@@ -325,8 +325,67 @@ Specific not-found cases get typed variants
 (`Error::QdiscNotFound { .. }`, etc.) for reconcile patterns.
 Kernel errors carry `KernelWithContext` (operation name + args +
 errno), so messages read like `"add_link(veth0, kind=veth): File
-exists (errno 17)"`. Operation timeouts are opt-in via
-`Connection::timeout(Duration)`; default is none.
+exists (errno 17)"`. **Operation timeout defaults to 30 seconds**
+(Plan 171 — closes the "hidden hang" class). Override with
+`Connection::timeout(Duration)`; opt out (rarely useful) with
+`.no_timeout()`. The default surfaces any kernel response
+anomaly as `Error::Timeout` instead of an indefinite block.
+
+## Recv-loop shape (canonical)
+
+Every netlink response-reading loop in the lib follows the same
+shape. Two structural requirements every new loop MUST meet —
+both surfaced by the 0.16 cycle's CI hang (`send_batch` lacked
+the seq filter; took 22 min of GHA wall-clock + 3 push-iterations
+to localize):
+
+1. **Filter by `nlmsg_seq`** before any other check. The kernel
+   may deliver stale responses from earlier requests on the same
+   fd, or multicast notifications interleaved with unicast
+   replies. `if header.nlmsg_seq != seq { continue; }` is
+   mandatory.
+2. **Terminate on the right marker.** Dumps terminate on
+   `NLMSG_DONE`. Batch commits (`NFNL_MSG_BATCH_*`) terminate
+   on the **BATCH_END's ACK specifically** — not the first
+   per-op ACK, which can fire mid-batch and leave the loop
+   thinking the batch is done.
+
+Canonical template:
+
+```rust
+let seq = self.socket().next_seq();
+// ... build + send request, tracking start/end seqs for batches ...
+
+loop {
+    let data = self.recv_with_timeout().await?;   // Plan 171: 30s default
+    let mut done = false;
+    for msg in MessageIter::new(&data) {
+        let (header, payload) = msg?;
+        if header.nlmsg_seq != seq {              // (1) seq filter
+            continue;
+        }
+        if header.is_error() {
+            let err = NlMsgError::from_bytes(payload)?;
+            if err.is_ack() {
+                // For batch commits: return only on the
+                // BATCH_END seq's ACK; per-op ACKs continue.
+                done = true;
+                break;
+            }
+            return Err(err.into_error(payload));
+        }
+        if header.is_done() {                     // (2) end marker
+            done = true;
+            break;
+        }
+        // ... accumulate payload ...
+    }
+    if done { break; }
+}
+```
+
+Plan 172 enforces this template across all 9 recv-loops in the
+lib. The audit table is in Plan 172 §2.1.
 
 ## Observability
 
@@ -392,10 +451,9 @@ nl80211,devlink,dpll,net_shaper}.rs`, `macros/define_taskstats.rs`,
 `{audit,bridge,config,connector,diagnostics,events,fib_lookup,
 impair,lab,namespace,nftables,ratelimit,route,selinux,sockdiag,
 uevent,xfrm}/`. Read these directly when learning a subsystem;
-registered examples are kept current (see
-[Plan 160](plans/160-example-registry-audit.md) for the 9 known
-orphan files behind a CI gate; they're catalogued for
-maintainer-paced triage).
+every shipped example is registered + builds clean under
+`cargo build --workspace --all-targets` (the
+`audit-example-registration` CI gate enforces zero orphans).
 
 **Convention — every example .rs MUST be registered in
 `crates/nlink/Cargo.toml`.** Cargo only auto-discovers examples
@@ -403,105 +461,27 @@ at the top level of `examples/`; any file in a subdirectory
 (`examples/route/foo.rs`, `examples/genl/bar.rs`, …) is invisible
 to `cargo build --workspace --all-targets` unless declared as an
 `[[example]] name=… path=…` block. Skipping the registration means
-the example bit-rots silently against API changes — surfaced by
-[Plan 160](plans/160-example-registry-audit.md) which catalogues
-9 such orphans found during the 0.16 cycle. `scripts/audit-
-example-registration.sh` enforces the convention; run it locally
-before merging a new example.
+the example bit-rots silently against API changes.
+`scripts/audit-example-registration.sh` enforces the convention;
+run it locally before merging a new example.
 
 ## Active work
 
-The **0.16 cycle is mid-flight** on the `0.16` branch (do not push
-to master). Plans live in [`plans/`](plans/) with
-[`plans/INDEX.md`](plans/INDEX.md) as the day-to-day status
-tracker. Headlines that landed so far:
+**0.16.0 shipped 2026-05-25** (`v0.16.0` tagged; both crates on
+crates.io). The cycle's headline additions are documented in
+`CHANGELOG.md ## [0.16.0]` + `docs/migration_guide/0.15.1-to-0.16.0.md`
+— the cycle's per-plan scaffolding was deleted post-cut per
+convention.
 
-- **Plan 154 — `nlink-macros` proc-macro crate** (🟢 all 7 main
-  phases + Phase 8.1-8.5 done). Downstream code declares a
-  complete custom GENL family + typed request/response in ~30
-  lines via `#[genl_family(...)]` + `#[derive(GenlMessage)]` +
-  `#[derive(GenlCommand/GenlAttribute/GenlEnum/NetlinkAttrs)]` +
-  `Connection::<F>::send_typed(req).await?`. Field types now
-  cover: primitives + `Option<T>` + `Vec<u8>` + `Vec<GenlEnum>`
-  + bitflags newtypes + `Option<GenlEnum>` + nested attribute
-  groups via `nested` hint. See
-  [`docs/recipes/define-your-own-genl-family.md`](docs/recipes/define-your-own-genl-family.md)
-  + [`crates/nlink/examples/macros/define_taskstats.rs`](crates/nlink/examples/macros/define_taskstats.rs).
-- **Plan 149 — streaming dump API** (🟢): `dump_stream<T>` +
-  `dump_stream_with_body<T>` (caller-parameterized body) +
-  typed wrappers for links/routes/neighbors/addresses + qdiscs/
-  classes/filters + XFRM SAs/SPs (`stream_sas`/`stream_sps`) +
-  conntrack (`stream_conntrack` / `_v4` / `_v6`) +
-  nft-rules (`stream_rules(table, family)`). O(1) memory
-  iteration over BGP/conntrack/IPsec/nft-scale dumps. The
-  `_with_body` extension reuses each family's existing
-  payload parser (parse_conntrack_body, parse_rule, etc.) so
-  one parser per kind serves eager / multicast / streaming
-  paths.
-- **Plan 150 — nftables flowtable** (🟢): full CRUD + multicast
-  events (`Connection::<Nftables>::subscribe` + 8 typed event
-  variants). §9.1 counters introspection formally closed —
-  kernel UAPI premise was wrong (per-flow counters live in
-  conntrack via `CTA_COUNTERS_*`, not in `NFT_MSG_GETFLOWTABLE`);
-  the `stream_conntrack` + `ConntrackStatus::OFFLOAD`/`HW_OFFLOAD`
-  filter pattern is documented in the nftables-stateful-fw recipe.
-- **Plan 151 — ENOBUFS resync** (🟢): `ResyncedEvent<T>` +
-  `ResyncMarker` + recipe shipped earlier; the pre-baked
-  `events_with_resync<S, T, F>` Stream wrapper + `ResyncStream`
-  state machine (`Forwarding` → `RunningSnapshot` → `Replaying`
-  → `Done`) landed in the 2026-05-25 pre-cut audit window. 6
-  unit tests cover pass-through, ENOBUFS+replay, empty-snapshot
-  markers, error fusing, snapshot failure, multiple recoveries.
-- **Plan 153 — kernel feature bundle** (🟢): all three sub-features
-  shipped (§4.1 XFRM IPsec offload + §4.2 Devlink rate +
-  port-function-state + §4.3 `net_shaper` GENL family — second
-  in-tree macro dogfood after DPLL).
-- **Plan 157 — declarative `NftablesConfig`** (🟢): diff + atomic
-  apply via the extended `Transaction` + `apply_reconcile(opts)`
-  + recipe + **per-rule USERDATA-keyed reconciliation identity**
-  (Plan 157b v2 — replaced original §4.3 typed-Match
-  canonicalization design after research showed
-  kube-proxy/Google nftables/etc. all use USERDATA comment-
-  tagging, not canonicalization). `DeclaredRule::handle_key`
-  round-trips as `NFTA_RULE_USERDATA = "nlink:<key>"`; diff
-  matches by key + body-bytes, emits `Transaction::replace_rule`
-  (NLM_F_REPLACE) for in-place body updates. NetworkConfig-
-  symmetric per-rule diff granularity. Sets/maps deferred per
-  original plan scope.
-- **Plan 158 — `syscall_batch` feature** (🟢 opt-in): `recvmmsg` /
-  `sendmmsg` batching wired into both eager dumps + streaming.
-- **Plan 159 — `ConnectionPool<P>`** (🟢): bounded-mpsc-channel-
-  backed pool for parallel fanout.
-- **Plan 156 — DPLL family** (🟢): first in-tree dogfood of the
-  macros. All 6 phases landed — `Connection<Dpll>` with
-  `get/dump/set_*` for devices and pins (all 11 typed enums +
-  nested groups + bitflags), push-based multicast monitor
-  (`subscribe_monitor()` + `DpllEvent` via `EventSource`),
-  recipe + example. ~430 lines of declarative Rust for the full
-  family vs ~600+ lines hand-written. Phase 5 closeout also
-  shipped **shared GENL multicast-group infrastructure**:
-  `__rt::resolve_genl_family_with_groups` +
-  `GenlFamily::mcast_group(name)` +
-  `Connection::<F: GenlFamily>::subscribe_group(name)`.
-  Devlink/Nl80211/Ethtool refactored to use it (−254 lines of
-  duplicated wire parsing).
-
-Pre-cut audit (2026-05-25) added Plans 161-166 — all 🟢:
-- **161** — 4 example companions for headline 0.16 features.
-- **162** — `PooledConnection::invalidate` consume-self (compile
-  error replaces runtime panic).
-- **163** — `#[non_exhaustive]` on 9 new-in-0.16 pub structs
-  (`ReconcileOptions` is now builder-only).
-- **164** — `NftablesConfig::diff` hoists `list_chains()` +
-  `list_flowtables()` out of the table loop (O(N²+N·R) → O(N+R)).
-- **165** — 5 doc-currency cleanups.
-- **166** — 20 root-gated integration tests across 6 new files
-  (~470 LOC) — ship in 0.16, run under privileged CI once
-  Plan 140 lands.
-
-Ready to start (no blockers): Plan 152 (aya/Prometheus/OTel
-showcases — both DPLL and net_shaper now in tree as macro
-reference points). Currently deprioritized per maintainer.
+The **0.17 cycle is complete** on the `0.17` branch (do not push
+to master); workspace at 0.17.0 awaiting maintainer cut via
+`scripts/cut-release.sh 0.17.0`. The cycle's narrative + per-
+feature entries live in
+[`CHANGELOG.md ## [Unreleased]`](CHANGELOG.md) (will become
+`## [0.17.0]` on cut) and the migration walkthrough in
+[`docs/migration_guide/0.16.0-to-0.17.0.md`](docs/migration_guide/0.16.0-to-0.17.0.md).
+Day-to-day status tracker for any in-flight or queued follow-ups
+is [`plans/INDEX.md`](plans/INDEX.md).
 
 Per-release upgrade guides:
 [`docs/migration_guide/`](docs/migration_guide/README.md) — write
@@ -520,8 +500,30 @@ so `cargo publish -p nlink` resolves the dep on crates.io;
 publishing nlink before nlink-macros fails with "no matching
 version found."
 
+Use `scripts/cut-release.sh X.Y.Z` (Plan 175) to walk the full
+cut: pre-flight, CHANGELOG promotion, CI green-gate, dry-runs,
+merge, tag, publish (macros → index-poll → nlink), GitHub release
+(length-aware body), next-cycle branch. The script confirms at
+every irreversible step. Manual equivalent for emergencies:
+
 ```bash
 cargo publish -p nlink-macros
 # wait ~30s for crates.io to index
 cargo publish -p nlink
 ```
+
+**Dry-run gotcha**: `cargo publish -p nlink --dry-run` will FAIL
+unless the matching `nlink-macros` version is already on
+crates.io. The dry-run checks against the live registry; the
+publish order is "macros first, then nlink." Skip the
+`nlink --dry-run`; rely on the macros dry-run + the real publish
+sequence. `cut-release.sh` skips it automatically with a comment.
+
+**Plan-file cleanup**: when a cycle cuts + publishes, delete the
+per-plan scaffolding under `plans/` in a follow-up commit. The
+durable narrative lives in `CHANGELOG.md ## [X.Y.Z]` +
+`docs/migration_guide/<from>-to-<to>.md`. Keep `plans/INDEX.md`
+(rewrite for the next cycle) and any plans still in flight or
+deprioritized but not abandoned. Reference: the 0.16 → 0.17
+transition deleted 23 0.16 plans + slimmed Plan 169 to just its
+open Phase 3 (`Bottleneck::score`).
