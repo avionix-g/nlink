@@ -21,9 +21,13 @@ walkthrough in
 - **Last cycle**: 0.17 — code work complete 2026-05-25;
   workspace bumped to 0.17.0; CI green on every commit.
   Awaiting maintainer cut via `scripts/cut-release.sh 0.17.0`.
+  Plan 179 (diagnostics-test migration) was pulled forward and
+  shipped in-cycle; surfaced an unrelated `send_request` /
+  `send_ack` recv-loop bug that's now fixed too (CHANGELOG
+  `### Fixed`).
 - **Next cycle**: 0.18.0 — branch will open from master after
-  the 0.17 cut publishes. Plan 179 (below) is the only carry-
-  over work currently queued.
+  the 0.17 cut publishes. No carry-over work currently queued;
+  the only parked item is Plan 152 (showcases — see below).
 
 ## Status legend
 
@@ -36,9 +40,7 @@ walkthrough in
 
 ## In-flight / queued
 
-| Plan | Title | Effort | Status | Notes |
-|------|-------|--------|--------|-------|
-| [179](179-diagnostics-tests-migrate-to-require-root-plan.md) | Migrate 12 `#[ignore]`'d `diagnostics.rs` tests to `nlink::require_root!()` | ~1-3 h | ⚪ | Surfaced by the 0.17 CI-observability work. Mechanical bulk pass; may surface latent test failures (these tests have never run). Pick up when 0.18 opens. |
+_(none — Plan 179 shipped; queue is empty for 0.18 opening)_
 
 ## Deprioritized (parked)
 

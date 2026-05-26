@@ -27,6 +27,21 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- **`Connection::send_request` / `send_ack` no longer error
+  when the socket is also subscribed to multicast groups** —
+  both recv paths did a single `recv_msg()` and bailed if the
+  returned frame happened to carry only multicast events
+  (`seq=0`) instead of the unicast ACK to the just-sent
+  request. They now loop on `recv_msg()` until a frame with a
+  matching seq arrives, ignoring unrelated multicast events
+  along the way. Same canonical shape Plan 172 enforced on the
+  dump-loops; the 30s default operation timeout (Plan 171)
+  bounds the loop. Affected the rare pattern of issuing
+  unicast requests on a `Connection` that's also `subscribe`'d
+  to a group the request mutates (e.g. an event-monitor
+  connection that also creates the interface it's about to
+  observe).
+
 - **`Connection::<Nftables>::send_batch` no longer hangs on a
   missing batch-end ACK (Plan 170)** — the recv-loop didn't
   filter by `nlmsg_seq` and terminated on the first per-op ACK
