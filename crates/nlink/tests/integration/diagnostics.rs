@@ -322,28 +322,34 @@ async fn test_diagnostics_no_address_detection() -> nlink::Result<()> {
     nlink::require_root!();
     let ns = TestNamespace::new("diag_noaddr")?;
 
-    // Create interface without address
+    // Create interface without an IPv4 address. Disable IPv6
+    // before bringing eth0 up — otherwise the kernel auto-
+    // assigns a link-local fe80::/64, which counts as an
+    // address and suppresses the `NoAddress` issue the test
+    // means to verify. (Plan 179 — IPv6 autoconf default
+    // shifted in newer kernels; the test was written when the
+    // GHA env still defaulted disable_ipv6=1 on dummies.)
     ns.add_dummy("eth0")?;
+    let _ = ns.exec("sysctl", &["-w", "net.ipv6.conf.eth0.disable_ipv6=1"]);
     ns.link_up("eth0")?;
-    // Don't add any addresses
 
     let conn = ns.connection()?;
     let diag = Diagnostics::new(conn);
 
     let report = diag.scan().await?;
 
-    // Find eth0
     let eth0 = report
         .interfaces
         .iter()
         .find(|i| i.name == "eth0")
         .expect("eth0 not found in report");
 
-    // Should have NoAddress issue (info level)
     assert!(
         eth0.issues
             .iter()
-            .any(|i| i.category == IssueCategory::NoAddress)
+            .any(|i| i.category == IssueCategory::NoAddress),
+        "expected NoAddress issue; got issues={:?}",
+        eth0.issues.iter().map(|i| &i.category).collect::<Vec<_>>(),
     );
     Ok(())
 }
