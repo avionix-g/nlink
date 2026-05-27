@@ -1,33 +1,34 @@
 ---
-subject: nlink plan index — post-0.17 / pre-0.18
-status: live (update as plans land or open)
-target version: 0.18.0 (next cycle)
+subject: nlink plan index — 0.18 cycle
+status: live (update as plans land)
+target version: 0.18.0
 maintainer: p13marc
-created: 2026-05-25 (post-0.17 cleanup; 0.16 + 0.17 per-plan scaffolding deleted per convention)
+created: 2026-05-26 (post-0.17 cut; 0.17 published 2026-05-26 as `0.17.0` + `v0.16.0` alias)
 ---
 
-# Plan index — post-0.17 / pre-0.18
+# Plan index — 0.18 cycle
 
-Day-to-day tracker for nlink's outstanding plan work. The 0.17
-cycle's per-plan scaffolding (Plans 169-178) was deleted after
-the cycle wrapped, per project convention — the durable narrative
-lives in [`CHANGELOG.md`](../CHANGELOG.md) `## [0.17.0]` (once
-cut; currently still under `## [Unreleased]`) and the migration
-walkthrough in
-[`docs/migration_guide/0.16.0-to-0.17.0.md`](../docs/migration_guide/0.16.0-to-0.17.0.md).
+Day-to-day tracker for nlink's 0.18 work. The 0.17 cycle
+shipped 2026-05-26 (both crates on crates.io; tagged `0.17.0`
+on master). The 0.18 cycle's seed surface is the upstream-asks
+report from the nlink-lab maintainer (2026-05-27), with one
+adjacent-gap finding (netdev hook `device`) bundled into the
+chain-attribute pass.
 
 ## Quick status
 
-- **Last cycle**: 0.17 — code work complete 2026-05-25;
-  workspace bumped to 0.17.0; CI green on every commit.
-  Awaiting maintainer cut via `scripts/cut-release.sh 0.17.0`.
-  Plan 179 (diagnostics-test migration) was pulled forward and
-  shipped in-cycle; surfaced an unrelated `send_request` /
-  `send_ack` recv-loop bug that's now fixed too (CHANGELOG
-  `### Fixed`).
-- **Next cycle**: 0.18.0 — branch will open from master after
-  the 0.17 cut publishes. No carry-over work currently queued;
-  the only parked item is Plan 152 (showcases — see below).
+- **Cycle**: 0.18.0 — branched from master post-0.17 cut.
+- **Branch**: all 0.18 work pushes to the `0.18` branch.
+  Cycle cut → master merge happens at release time. **Do not
+  push to master.**
+- **Workspace version**: still `0.17.0`. Bump to `0.18.0` once
+  the first 0.18-breaking change lands (Plan 181 is additive,
+  Plan 180 is additive, so the bump may not be forced until a
+  later cycle item).
+- **CI**: open a draft PR `0.18 → master` once the first
+  commit lands so the workflow fires on every push.
+- **Seed report**: [`nlink-upstream-asks.md`](../nlink-upstream-asks.md)
+  (committed in repo root; nlink-lab maintainer, 2026-05-27).
 
 ## Status legend
 
@@ -38,15 +39,45 @@ walkthrough in
 | 🟢 | Merged to master |
 | 🔵 | Cut & published |
 
-## In-flight / queued
+## Sub-plan table
 
-_(none — Plan 179 shipped; queue is empty for 0.18 opening)_
+Ordered by recommended landing sequence: unblocker first, then
+the larger ergonomic surface, then the trivials, then the
+medium-size dependent plan.
+
+| Plan | Title | Effort | Order | Status | Notes |
+|------|-------|--------|-------|--------|-------|
+| [180](180-declarative-chain-type-and-device-plan.md) | `DeclaredChainBuilder::chain_type` + `Chain`/`DeclaredChain` `device` for netdev hooks | ~2.5 h | 1 | ⚪ | **Unblocks nlink-lab Plan 158a.** Ask 1 + adjacent netdev-hook gap. |
+| [181](181-list-in-filter-family-plan.md) | `list_{tables,chains,flowtables,sets}_in(table?, family)` server-side filter family | ~2 h | 2 | ⚪ | Ask 2 generalized. **Prerequisite for Plan 185.** |
+| [182](182-error-ext-ack-accessor-plan.md) | `Error::ext_ack()` + `Error::ext_ack_offset()` inherent accessors | ~30 min | 3 | ⚪ | Wishlist 3 — trivial additive on `impl Error`. |
+| [183](183-display-for-diff-types-plan.md) | `impl Display for NftablesDiff` + `NetworkDiff` (wraps existing `summary()`) | ~30 min | 4 | ⚪ | Wishlist 1 — report overestimated at 80 LOC, actual is ~15. |
+| [184](184-default-route-constructors-plan.md) | `Ipv4Route::default_route()` / `Ipv6Route::default_route()` constructors | ~20 min | 5 | ⚪ | Wishlist 5 — cosmetic; bundle with 182/183 in one "small additives" PR if desired. |
+| [185](185-nftables-subscribe-with-resync-plan.md) | `Connection<Nftables>::subscribe_all_with_resync` | ~4 h | 6 | ⚪ | Wishlist 2 — depends on Plan 181 (`list_*_in`). |
+
+Total estimated focused-work: **~9.5 h** + integration-test CI
+cycle time.
+
+## Wishlist items NOT scoped this cycle
+
+| Item | Why deferred |
+|------|--------------|
+| `for_each_namespace_async` (Wishlist 4) | Too opinionated for core (hardcodes thread-per-ns + current_thread runtime). Belongs in `nlink::lab` if anywhere. Defer — let consumers compose `namespace::with_namespace_async` themselves. |
+| `NetworkConfig` per-object reconcile parity (Wishlist 6) | Multi-cycle scope. RTNETLINK lacks BATCH_BEGIN/END so "atomic apply" needs best-effort rollback design. Warrants a design doc before any code. Open a doc-only plan when there's bandwidth. |
 
 ## Deprioritized (parked)
 
 | Plan | Why parked |
 |------|------------|
 | [152](152-0.16-integration-showcases-plan.md) | `aya` co-demo + Prometheus exporter + OTel example. Carried from 0.16 without a real adopter signal. Revisit if a downstream asks for it. |
+
+## Known maintainer-tooling bug
+
+- `scripts/cut-release.sh` Phase 3 captures the PR number AND the
+  `gh pr checks --watch` status lines into `PR_NUMBER` (output
+  capture vs. stdout). Fix: send status echoes to stderr
+  (`echo ... >&2`) and emit only the bare PR number on stdout.
+  Surfaced during the 0.17.0 cut; ~5-line patch on the script.
+  Do this before the next cut.
 
 ## How to update this file
 
@@ -59,5 +90,5 @@ When a plan moves status:
    migration guide; plan files are working memory and shouldn't
    accumulate.
 3. Rewrite this INDEX when opening a new cycle — clear the
-   "Quick status" + "In-flight / queued" sections, leaving
+   "Quick status" + "Sub-plan table" sections, leaving
    "Deprioritized" intact unless explicitly un-parked.
