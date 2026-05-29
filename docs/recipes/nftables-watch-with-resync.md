@@ -25,15 +25,15 @@ get an ENOBUFS-resilient `Stream<Item = Result<ResyncedEvent<NftablesEvent>>>`.
 ```rust
 use std::sync::Arc;
 use nlink::netlink::{Connection, Nftables};
-use nlink::netlink::nftables::{NftablesEvent, ConnectionFactory};
-use nlink::netlink::resync::{ResyncedEvent, ResyncMarker};
+use nlink::netlink::nftables::NftablesEvent;
+use nlink::netlink::resync::{ConnectionFactory, ResyncedEvent, ResyncMarker};
 use tokio_stream::StreamExt;
 
 #[tokio::main]
 async fn main() -> nlink::Result<()> {
     // Factory: how to build a fresh Connection<Nftables>.
     // The wrapper invokes this each time it needs to re-dump.
-    let factory: ConnectionFactory = Arc::new(|| {
+    let factory: ConnectionFactory<Nftables> = Arc::new(|| {
         Box::pin(async { Connection::<Nftables>::new() })
     });
 
@@ -94,7 +94,7 @@ subscribe socket:
 
 ```rust
 let netns_name = "tenant-a".to_string();
-let factory: ConnectionFactory = Arc::new(move || {
+let factory: ConnectionFactory<Nftables> = Arc::new(move || {
     let ns = netns_name.clone();
     Box::pin(async move {
         nlink::netlink::namespace::connection_for(&ns)

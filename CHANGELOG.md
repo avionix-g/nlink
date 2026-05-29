@@ -94,6 +94,36 @@ All notable changes to this project will be documented in this file.
 
 ### Audit fixes
 
+- **`ConnectionFactory<P>` + `ConnectionFuture<P>` are now
+  generic + live at the crate root (Plan 185 audit)** — Plan 185
+  spec called for `ConnectionFactory<P>` at the crate root; the
+  first cut shipped a non-generic `nftables::resync::ConnectionFactory`
+  pinned to `Nftables`. Aligned now: both types live in
+  `nlink::netlink::resync` (re-exported as `nlink::ConnectionFactory<P>`
+  / `nlink::ConnectionFuture<P>`). Existing call sites add the
+  `<Nftables>` turbofish, matching the established
+  `Connection<P>::new()` pattern. Future protocol watchers can
+  reuse the same alias without redefining it.
+
+- **Plan 181 wire-shape unit tests landed** — 4 tests covering
+  `build_list_tables_request` / `build_list_chains_request` /
+  `build_list_flowtables_request` / `build_list_sets_request`,
+  matching Plan 181 §5 acceptance. Extracted the request-builder
+  bodies into free `pub(crate)` functions so the tests can
+  inspect the on-wire bytes without socket I/O. No behavioral
+  change to the public `list_*_in` methods.
+
+- **Plan 185 ENOBUFS-recovery integration test landed** — new
+  `into_events_with_resync_recovers_from_enobufs` (root-gated)
+  drives the wrapper end-to-end through a real kernel overflow:
+  shrinks the multicast subscriber's `SO_RCVBUF` to 256 bytes,
+  spawns a 2k-iteration rule-add flood from a second connection,
+  drains the resync stream slowly, asserts the
+  `ResyncStart → Resynced(...) → ResyncEnd` marker sequence.
+  Needed a new `NetlinkSocket::set_rcvbuf(bytes)` helper
+  (`SO_RCVBUFFORCE` — requires `CAP_NET_ADMIN`, matches the
+  existing root-gated test scope).
+
 - **`ChainInfo.chain_type` is now `Option<ChainType>` (was
   `Option<String>`) (Plan 180 audit)** — Plan 180 spec called
   for a typed enum on the dump-side field; the first cut

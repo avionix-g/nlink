@@ -31,13 +31,13 @@
 //! ```ignore
 //! use std::sync::Arc;
 //! use nlink::netlink::{Connection, Nftables};
-//! use nlink::netlink::resync::{ResyncedEvent, ResyncMarker};
+//! use nlink::netlink::resync::{ConnectionFactory, ResyncedEvent, ResyncMarker};
 //! use nlink::netlink::nftables::NftablesEvent;
 //! use tokio_stream::StreamExt;
 //!
-//! let factory = Arc::new(|| Box::pin(async {
+//! let factory: ConnectionFactory<Nftables> = Arc::new(|| Box::pin(async {
 //!     Connection::<Nftables>::new()
-//! }) as _);
+//! }));
 //!
 //! let mut conn = Connection::<Nftables>::new()?;
 //! conn.subscribe_all()?;
@@ -57,44 +57,15 @@
 //! ```
 
 use std::pin::Pin;
-use std::sync::Arc;
 
 use tokio_stream::Stream;
 
 use super::events::NftablesEvent;
 use super::types::Family;
 use crate::netlink::protocol::Nftables;
-use crate::netlink::resync::{ResyncStream, events_with_resync};
+use crate::netlink::resync::{ConnectionFactory, ResyncStream, events_with_resync};
 use crate::netlink::stream::{EventSubscription, OwnedEventStream};
 use crate::{Connection, Result};
-
-/// Boxed `Future` returning a fresh `Connection<Nftables>`. The
-/// `'static` bound makes the resulting stream spawn-friendly.
-pub type ConnectionFuture =
-    Pin<Box<dyn Future<Output = Result<Connection<Nftables>>> + Send + 'static>>;
-
-/// User-supplied closure that opens a fresh `Connection<Nftables>`
-/// each time the resync wrapper needs to re-dump state after an
-/// `ENOBUFS`.
-///
-/// The factory is cloned + invoked from the stream's `poll_next`
-/// — it must be `Send + Sync + 'static` so the resulting stream
-/// is itself spawnable across threads. Most callers wrap a plain
-/// closure in `Arc::new(...)`:
-///
-/// ```ignore
-/// use std::sync::Arc;
-/// use nlink::netlink::{Connection, Nftables};
-///
-/// let factory = Arc::new(|| Box::pin(async {
-///     Connection::<Nftables>::new()
-/// }) as _);
-/// ```
-///
-/// Namespace-aware code substitutes
-/// [`namespace::connection_for`](crate::netlink::namespace::connection_for)
-/// here.
-pub type ConnectionFactory = Arc<dyn Fn() -> ConnectionFuture + Send + Sync + 'static>;
 
 /// Walk the full ruleset on a freshly-opened connection,
 /// returning everything as `NewX(...)` events.
@@ -149,7 +120,7 @@ type SnapshotFn = Box<dyn FnMut() -> SnapshotFuture + Send + Unpin + 'static>;
 /// Build the resync closure passed to [`events_with_resync`].
 /// Each invocation opens a fresh `Connection<Nftables>` via the
 /// factory + walks the ruleset via [`nftables_snapshot`].
-fn make_snapshot_fn(factory: ConnectionFactory) -> SnapshotFn {
+fn make_snapshot_fn(factory: ConnectionFactory<Nftables>) -> SnapshotFn {
     Box::new(move || {
         let factory = factory.clone();
         Box::pin(async move {
@@ -195,7 +166,7 @@ impl Connection<Nftables> {
     #[tracing::instrument(level = "info", skip_all)]
     pub fn into_events_with_resync(
         mut self,
-        factory: ConnectionFactory,
+        factory: ConnectionFactory<Nftables>,
     ) -> Result<OwnedResyncStream> {
         self.subscribe_all()?;
         let stream = self.into_events();
@@ -212,7 +183,7 @@ impl Connection<Nftables> {
     #[tracing::instrument(level = "info", skip_all)]
     pub fn subscribe_all_with_resync(
         &mut self,
-        factory: ConnectionFactory,
+        factory: ConnectionFactory<Nftables>,
     ) -> Result<BorrowedResyncStream<'_>> {
         self.subscribe_all()?;
         let stream = self.events();
@@ -232,11 +203,14 @@ fn _streams_are_streams() {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use super::*;
+    use crate::netlink::resync::ConnectionFuture;
 
     #[test]
     fn factory_is_clone_and_send() {
-        let factory: ConnectionFactory = Arc::new(|| {
+        let factory: ConnectionFactory<Nftables> = Arc::new(|| {
             Box::pin(async { Connection::<Nftables>::new() })
                 as Pin<Box<dyn Future<Output = Result<Connection<Nftables>>> + Send + 'static>>
         });
@@ -245,9 +219,9 @@ mod tests {
         // type bounds so a regression caught at compile time.
         fn assert_send_sync<T: Send + Sync>() {}
         fn assert_send<T: Send>() {}
-        assert_send_sync::<ConnectionFactory>();
+        assert_send_sync::<ConnectionFactory<Nftables>>();
         // ConnectionFuture is `Send` (not `Sync`) — a future
         // held by a single executor doesn't need Sync.
-        assert_send::<ConnectionFuture>();
+        assert_send::<ConnectionFuture<Nftables>>();
     }
 }

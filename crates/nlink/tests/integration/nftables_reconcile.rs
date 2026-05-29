@@ -433,6 +433,154 @@ async fn list_in_filters_match_only_target_table() -> nlink::Result<()> {
     .await
 }
 
+/// Plan 185 — driving the wrapper end-to-end through a real
+/// `ENOBUFS` overflow. Shrinks the multicast subscriber's
+/// `SO_RCVBUF` to a tiny value, opens a second mutator
+/// connection that floods the kernel with rule add/delete in a
+/// tight loop, then drains the resync stream slowly. The wrapper
+/// must observe the ENOBUFS, invoke the factory, walk the
+/// snapshot, and emit
+/// `Marker(ResyncStart) → Resynced(...) → Marker(ResyncEnd)`.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn into_events_with_resync_recovers_from_enobufs() -> nlink::Result<()> {
+    require_root!();
+    nlink::require_modules!("nf_tables");
+
+    use std::sync::Arc;
+
+    use nlink::netlink::nftables::NftablesEvent;
+    use nlink::netlink::resync::{ConnectionFactory, ResyncMarker, ResyncedEvent};
+    use tokio_stream::StreamExt;
+
+    with_timeout(async {
+        let ns = TestNamespace::new("nft-resync")?;
+        let ns_name = ns.name().to_string();
+
+        // Seed config: one table + one chain. The rules we churn
+        // through during the flood live in this chain.
+        let cfg = NftablesConfig::new().table("flood", Family::Inet, |t| {
+            t.chain("input", |c| {
+                c.hook(Hook::Input)
+                    .priority(Priority::Filter)
+                    .policy(Policy::Accept)
+            })
+        });
+        let seed = nft_in_ns(&ns)?;
+        cfg.diff(&seed).await?.apply(&seed).await?;
+        drop(seed);
+
+        // Subscriber connection — set a tiny rcvbuf via the
+        // SO_RCVBUFFORCE helper landed in this same plan, so the
+        // flood overflows it in a handful of mutations rather
+        // than minutes.
+        let event_conn = nft_in_ns(&ns)?;
+        event_conn.socket().set_rcvbuf(256)?;
+
+        // Factory: open fresh Nftables connections inside the
+        // same namespace for the resync snapshot dump.
+        let factory: ConnectionFactory<Nftables> = {
+            let ns_name = ns_name.clone();
+            Arc::new(move || {
+                let ns_name = ns_name.clone();
+                Box::pin(async move { namespace::connection_for(&ns_name) })
+            })
+        };
+
+        let mut stream = event_conn.into_events_with_resync(factory)?;
+
+        // Mutator task: tight rule add/delete loop. Runs until
+        // we cancel via the abort handle. Uses get_rule + handle
+        // tracking via the integration test's existing churn
+        // pattern.
+        let mut_ns = ns_name.clone();
+        let mutator = tokio::spawn(async move {
+            let nft = namespace::connection_for::<Nftables>(&mut_ns)?;
+            for i in 0..2_000u32 {
+                use nlink::netlink::nftables::Rule;
+                let rule = Rule::new("flood", "input")
+                    .family(Family::Inet)
+                    .accept()
+                    .comment(&format!("r{i}"));
+                let _ = nft.add_rule(rule).await;
+                // No delete — we want the kernel to emit more
+                // mcast events than the subscriber drains. The
+                // table is torn down with the netns at test exit.
+            }
+            Ok::<_, nlink::Error>(())
+        });
+
+        // Drain the stream slowly. Look for the resync marker
+        // sequence. Bail after a generous deadline so a
+        // mis-behaving kernel doesn't hang the suite.
+        let mut saw_start = false;
+        let mut snapshot_count = 0usize;
+        let mut saw_end = false;
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(20);
+
+        while tokio::time::Instant::now() < deadline {
+            tokio::select! {
+                item = stream.next() => {
+                    let Some(item) = item else { break };
+                    match item? {
+                        ResyncedEvent::Marker(ResyncMarker::ResyncStart) => {
+                            saw_start = true;
+                        }
+                        ResyncedEvent::Resynced(ev) => {
+                            assert!(
+                                saw_start,
+                                "Resynced item before ResyncStart marker"
+                            );
+                            snapshot_count += 1;
+                            // The snapshot must contain our seed
+                            // table + chain.
+                            match ev {
+                                NftablesEvent::NewTable(t) => {
+                                    assert_eq!(t.name, "flood");
+                                }
+                                NftablesEvent::NewChain(_)
+                                | NftablesEvent::NewRule(_)
+                                | NftablesEvent::NewFlowtable(_)
+                                | NftablesEvent::NewSet(_) => {}
+                                other => panic!(
+                                    "snapshot must emit only New* variants; got {other:?}"
+                                ),
+                            }
+                        }
+                        ResyncedEvent::Marker(ResyncMarker::ResyncEnd) => {
+                            assert!(saw_start, "ResyncEnd before ResyncStart");
+                            saw_end = true;
+                            break;
+                        }
+                        ResyncedEvent::Event(_) => {
+                            // Live event; ignored — we're chasing
+                            // the resync sequence.
+                        }
+                        _ => {}
+                    }
+                }
+                _ = tokio::time::sleep(Duration::from_millis(50)) => {
+                    // Slow consumer — gives the mutator room to
+                    // flood the subscriber's tiny rcvbuf.
+                }
+            }
+            // Throttle the consumer so the mutator gets ahead.
+            tokio::time::sleep(Duration::from_millis(2)).await;
+        }
+
+        mutator.abort();
+
+        assert!(saw_start, "wrapper must emit ResyncMarker::ResyncStart on ENOBUFS");
+        assert!(saw_end, "wrapper must emit ResyncMarker::ResyncEnd after snapshot");
+        assert!(
+            snapshot_count >= 2,
+            "snapshot must include at least the seed table + chain; got {snapshot_count}"
+        );
+
+        Ok(())
+    })
+    .await
+}
+
 /// Plan 185 — `into_events_with_resync` walks the ruleset
 /// snapshot via a fresh `Connection<Nftables>` from the factory
 /// and yields the snapshot as `Resynced(...)` items between

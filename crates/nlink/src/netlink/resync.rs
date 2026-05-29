@@ -132,9 +132,52 @@ impl<T> ResyncedEvent<T> {
 use std::collections::VecDeque;
 use std::future::Future;
 use std::pin::Pin;
+use std::sync::Arc;
 use std::task::{Context, Poll};
 
 use tokio_stream::Stream;
+
+// ============================================================
+// ConnectionFactory<P> — generic factory for opening fresh
+// `Connection<P>` during ENOBUFS recovery. Used by protocol-
+// specific resync wrappers (e.g. nftables) so the consumer
+// can carry netns context / extra setup into every retry.
+// ============================================================
+
+/// Boxed future producing a fresh `Connection<P>`. Defaults to
+/// `'static` so the resulting stream is spawn-friendly.
+///
+/// This is the building block for [`ConnectionFactory<P>`].
+pub type ConnectionFuture<P> =
+    Pin<Box<dyn Future<Output = crate::Result<crate::Connection<P>>> + Send + 'static>>;
+
+/// User-supplied closure that opens a fresh `Connection<P>` each
+/// time a resync wrapper needs to re-dump after an `ENOBUFS`.
+///
+/// Mirrors the `kube_rs::watcher(api, cfg)` pattern: the wrapper
+/// captures the factory, clones it across resync invocations, and
+/// invokes it to materialise a clean unicast connection (Plan
+/// 178's "subscribe + unicast on one socket" race makes this the
+/// only correct shape).
+///
+/// `Arc`-wrapped so it's cheap to clone across `poll_next` calls.
+/// Most callers wrap a plain closure in `Arc::new(...)`:
+///
+/// ```ignore
+/// use std::sync::Arc;
+/// use nlink::netlink::{Connection, Nftables};
+/// use nlink::netlink::resync::ConnectionFactory;
+///
+/// let factory: ConnectionFactory<Nftables> = Arc::new(|| {
+///     Box::pin(async { Connection::<Nftables>::new() })
+/// });
+/// ```
+///
+/// Namespace-aware code substitutes
+/// [`namespace::connection_for`](crate::netlink::namespace::connection_for)
+/// (or `_async` for GENL families) inside the closure.
+pub type ConnectionFactory<P> =
+    Arc<dyn Fn() -> ConnectionFuture<P> + Send + Sync + 'static>;
 
 /// Internal state-machine state for [`ResyncStream`].
 ///
