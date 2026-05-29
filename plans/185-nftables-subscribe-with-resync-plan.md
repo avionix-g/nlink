@@ -1,12 +1,12 @@
 ---
 to: nlink maintainers
-from: nlink-lab upstream-asks report (2026-05-27) §Wishlist 2 + Plan 185 implementation scope finding (2026-05-29) + ecosystem research (2026-05-30)
-subject: `Connection<Nftables>::into_events_with_resync(factory)` — kube-rs-shaped watcher with built-in ENOBUFS recovery
-status: **redesigned 2026-05-30** after first-cut implementation surfaced a lifetime constraint clash; research grounded in `kube-rs watcher` / Linux multicast conventions
+from: nlink-lab upstream-asks report (2026-05-27) §Wishlist 2 + Plan 185 implementation scope finding (2026-05-29) + ecosystem research (2026-05-30) + backcompat-freedom revision (2026-05-30)
+subject: `Connection<Nftables>::{into_events_with_resync, subscribe_all_with_resync}(factory)` — kube-rs-shaped watcher with built-in ENOBUFS recovery, both owned + borrowed forms
+status: **revised again 2026-05-30** — maintainer authorized breaking changes; lifetime-generic `events_with_resync` refactor + bundled `NftablesEvent::NewSet` parsing now in scope
 target version: 0.18.0
 parent: (none — single-deliverable plan)
-source: nlink-lab maintainer report §Wishlist 2; ecosystem audit
-created: 2026-05-27 (rewritten 2026-05-30)
+source: nlink-lab maintainer report §Wishlist 2; ecosystem audit; maintainer backcompat-freedom directive
+created: 2026-05-27 (rewritten 2026-05-30; expanded 2026-05-30)
 ---
 
 # Plan 185 — `into_events_with_resync` for nftables
@@ -306,25 +306,46 @@ form as the explicit deferred follow-up. nlink-lab's per-
 namespace fan-out is the actual use case, and that needs
 `'static` anyway.
 
-## 5. Sub-decision: do we need the lifetime-generic refactor?
+## 5. Sub-decision: lifetime-generic refactor — now in scope
 
-If we ship Option B (`into_events_with_resync`) only,
-**no** — the `'static` events stream from `into_events()`
-fits the existing `events_with_resync` signature unchanged.
+**Revised 2026-05-30**: maintainer authorized breaking
+changes for 0.18. The lifetime-generic refactor that was
+previously "invasive and out-of-scope" is now a clean,
+cheap internal change.
 
-If we ALSO ship `subscribe_all_with_resync(&mut self)` per
-§4.4, we'd need to either:
-1. Refactor `events_with_resync<'a, S, T, F>` to take
-   `Pin<Box<dyn Future + Send + 'a>>` — invasive (touches a
-   shipped public API).
-2. Build a separate `borrowed_events_with_resync` that
-   duplicates the state machine with the right bound.
+The bound on `events_with_resync`'s resync closure changes
+from:
 
-**Recommendation: ship `into_events_with_resync` only for
-0.18.0**, document `subscribe_all_with_resync(&mut self)` as
-explicitly out-of-scope until a downstream consumer asks. The
-kube-rs precedent rejected the borrowed form for exactly the
-same reasons.
+```rust
+F: FnMut() -> Pin<Box<dyn Future<Output = ...> + Send>> + Unpin
+//                                              ↑ implicitly 'static
+```
+
+…to:
+
+```rust
+F: FnMut() -> Pin<Box<dyn Future<Output = ...> + Send + 'a>> + Unpin
+//                                              ↑ explicit 'a
+```
+
+Existing callers (using `'static` futures) keep compiling
+because `'static: 'a` for any `'a`. The semver gate stays
+shut for 99% of downstream code; the explicit lifetime is
+visible only to callers who want the borrowed form.
+
+**Both forms now ship**:
+- `into_events_with_resync(self, factory) -> impl Stream + Send + 'static`
+  — primary, spawn-able + `StreamMap`-mergeable.
+- `subscribe_all_with_resync(&mut self, factory) -> impl Stream + Send + '_`
+  — borrowed convenience for quick demos. Not spawn-able,
+  but useful for in-task watch loops where the connection is
+  also doing unicast queries (with the Plan 178 race risk
+  understood).
+
+Why ship both: zero-marginal-cost once the refactor lands;
+the kube-rs precedent rejected the borrowed form as
+*primary*, not as a secondary option. Some consumers will
+want the borrowed form for short-lived interactive scripts.
 
 ## 6. Tests
 
@@ -404,29 +425,41 @@ fn factory_arc_clones_on_each_resync_call() {
       coming from k8s immediately recognize it).
 - [ ] CHANGELOG `### Added` entry.
 
-## 8. Effort estimate (revised)
+## 8. Effort estimate (revised 2026-05-30)
 
 | Phase | Effort |
 |---|---|
+| Refactor `events_with_resync` to lifetime-generic `'a` | ~45 min |
 | `nftables/resync.rs` module + `nftables_snapshot` + `ConnectionFactory` | ~45 min |
 | `into_events_with_resync` impl | ~30 min |
-| Unit test (factory clone semantics) | ~30 min |
-| Integration test (ENOBUFS recovery) | ~1.5 h |
+| `subscribe_all_with_resync` impl (borrowed form) | ~30 min |
+| Add `NftablesEvent::{NewSet, DelSet}` + parser wiring | ~45 min |
+| Unit tests (factory clone semantics, snapshot ordering) | ~45 min |
+| Integration test (ENOBUFS recovery — both forms) | ~2 h |
 | Recipe + CHANGELOG | ~30 min |
-| **Total** | **~3.5 h** |
+| **Total** | **~5 – 5.5 h** |
 
-Down from the original ~4 h since the lifetime puzzle is now
-sidestepped, not solved.
+Up from ~3.5 h to absorb the lifetime-generic refactor + the
+NEWSET parsing bundle + the borrowed form. Trade-off:
+slightly higher up-front cost, but downstream consumers get
+a complete API surface in one cycle instead of three.
 
 ## 9. Risks
 
-- **`NftablesEvent::NewSet`** is not currently parsed from
-  the live stream (`nftables/events.rs:67` — "Sets are not
-  currently parsed into typed event variants"). Snapshot
-  cannot synthesize what the live stream wouldn't emit, or
-  consumers see asymmetry. Solution: skip sets from the
-  snapshot in 0.18; queue a follow-up plan to wire NEWSET
-  parsing on both sides simultaneously.
+- **`NftablesEvent::NewSet` parsing — now bundled into this
+  plan (2026-05-30 revision).** Previously deferred to avoid
+  asymmetry between snapshot and live stream. With backcompat
+  freedom for 0.18, NEWSET + DELSET parsing on the live side
+  is in scope too:
+  - Add `NewSet(SetInfo)` + `DelSet(SetInfo)` to
+    `NftablesEvent` enum.
+  - Wire `NFT_MSG_NEWSET` / `NFT_MSG_DELSET` handling in
+    `nftables/events.rs::parse_nftables_event`.
+  - Snapshot emits `NewSet(...)` per `list_sets_in(table, family)`
+    result during the snapshot walk (Plan 181 prereq is
+    satisfied).
+  - Removes the asymmetry; consumers see a symmetric snapshot/
+    live shape across all 5 entity kinds.
 
 - **ENOBUFS integration test is timing-sensitive across kernel
   versions** — same risk Plan 151's existing tests already
@@ -440,10 +473,6 @@ sidestepped, not solved.
 
 ## 10. Out-of-scope follow-ups
 
-- **`subscribe_all_with_resync(&mut self)` borrowed form** —
-  ship if requested; needs either `events_with_resync` lifetime-
-  generic refactor or a parallel implementation. Per kube-rs
-  precedent, probably never needed.
 - **Same pattern for `Connection<Netfilter>` (conntrack)** —
   add `conntrack_snapshot` + `into_events_with_resync` on
   `Connection<Netfilter>`. Trivial port once the nftables
@@ -454,8 +483,10 @@ sidestepped, not solved.
 - **`SnapshotResync` trait on `Connection<P>` for any P** —
   factor out once 3+ protocols have concrete implementations.
   Trait shape only becomes clear with 3 data points.
-- **`NewSet` event variant** + live-stream parsing — see
-  Risks §9.
+- **Convenience `Connection::resync_factory(ns_name)`
+  builder** — reduces the `Arc<dyn Fn ...>` ceremony for the
+  common per-namespace case. Defer until ergonomic pain is
+  measured in practice.
 
 ## 11. Why this design is the right call
 
