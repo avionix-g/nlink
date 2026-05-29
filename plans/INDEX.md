@@ -53,7 +53,7 @@ medium-size dependent plan.
 | [182](182-error-ext-ack-accessor-plan.md) | `Error::ext_ack()` + `Error::ext_ack_offset()` inherent accessors | ~30 min | 3 | 🟢 | Shipped `7fc03ce` (bundled). |
 | [183](183-display-for-diff-types-plan.md) | `impl Display for NftablesDiff` + `ConfigDiff` (wraps existing `summary()`) | ~30 min | 4 | 🟢 | Shipped `7fc03ce` (bundled). Note: target was `NetworkDiff` per the report, but the actual type name is `ConfigDiff` — used that. |
 | [184](184-default-route-constructors-plan.md) | `Ipv4Route::default_route()` / `Ipv6Route::default_route()` constructors | ~20 min | 5 | 🟢 | Shipped `7fc03ce` (bundled). |
-| [185](185-nftables-subscribe-with-resync-plan.md) | `Connection<Nftables>::{into_events_with_resync, subscribe_all_with_resync}(factory)` — kube-rs-shaped watcher with built-in ENOBUFS recovery; both owned + borrowed forms | ~5 h | 6 | 🟡 | **Landed locally 2026-05-29** — lifetime-generic `events_with_resync` refactor + `NftablesEvent::{NewSet,DelSet}` + `nftables::resync` module + `nftables_snapshot` helper + recipe (`docs/recipes/nftables-watch-with-resync.md`) + integration test (`nftables_snapshot_walks_ruleset`). Pending: push to `0.18` + CI green. |
+| [185](185-nftables-subscribe-with-resync-plan.md) | `Connection<Nftables>::{into_events_with_resync, subscribe_all_with_resync}(factory)` — kube-rs-shaped watcher with built-in ENOBUFS recovery; both owned + borrowed forms | ~5 h | 6 | 🟢 | Shipped `adf386d`. All 12 CI gates green incl. integration (2m48s). Lifetime-generic `events_with_resync` + `NftablesEvent::{NewSet,DelSet}` + `nftables::resync` module + recipe + migration guide all bundled. Closes nlink-lab Wishlist 5. |
 
 Total estimated focused-work: **~9.5 h** + integration-test CI
 cycle time.
