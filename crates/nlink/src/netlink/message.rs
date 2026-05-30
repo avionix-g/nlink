@@ -203,11 +203,25 @@ impl<'a> Iterator for MessageIter<'a> {
 
         let header = match NlMsgHdr::from_bytes(self.data) {
             Ok(h) => h,
-            Err(e) => return Some(Err(e)),
+            Err(e) => {
+                // Plan 193 §2.3 / rule 2 — exhaust the iterator
+                // on parse error so a subsequent `next()` call
+                // returns None instead of looping forever on the
+                // same malformed prefix.
+                self.data = &[];
+                return Some(Err(e));
+            }
         };
 
         let msg_len = header.nlmsg_len as usize;
         if msg_len < NLMSG_HDRLEN || msg_len > self.data.len() {
+            // Same exhaustion contract as above — without this
+            // sentinel, a truncated frame from the kernel (or
+            // any malformed header advertising more bytes than
+            // present) would re-emit the Err on every poll,
+            // hanging long-lived multicast subscribers (Plan
+            // 193 §2.3, CLAUDE.md §"Parser robustness" rule 2).
+            self.data = &[];
             return Some(Err(Error::InvalidMessage(format!(
                 "invalid message length: {}",
                 msg_len
@@ -217,7 +231,10 @@ impl<'a> Iterator for MessageIter<'a> {
         let payload = &self.data[NLMSG_HDRLEN..msg_len];
         let aligned_len = nlmsg_align(msg_len);
 
-        // Move to next message
+        // Move to next message. Edge case: `aligned_len == 0`
+        // would mean the header advertises zero bytes (rejected
+        // above by the `msg_len < NLMSG_HDRLEN` guard) — so this
+        // branch always advances at least NLMSG_HDRLEN bytes.
         if aligned_len >= self.data.len() {
             self.data = &[];
         } else {

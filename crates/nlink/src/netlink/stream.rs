@@ -1151,6 +1151,106 @@ fn parse_ethtool_event(cmd: u8, data: &[u8]) -> Option<super::genl::ethtool::Eth
 mod tests {
     use super::*;
 
+    // -------------------------------------------------------------
+    // Plan 193 §2.3 — parse-error skip regression coverage.
+    //
+    // Per CLAUDE.md §"Parser robustness" rule 3, event parsers
+    // walking `MessageIter::new(data)` must skip malformed
+    // frames rather than propagate via `?`. One bad frame from
+    // a future kernel must NOT kill a long-lived multicast
+    // subscriber. These tests pin the contract.
+    //
+    // The audit script `scripts/audit-recv-loop-error-handling.sh`
+    // is the CI-side defense (Plan 193 phase 1); these tests
+    // are the runtime-side defense.
+    // -------------------------------------------------------------
+
+    /// Build a length-tagged netlink frame: nlmsg_len (u32) +
+    /// nlmsg_type (u16) + flags (u16) + seq (u32) + pid (u32)
+    /// + payload. Used for the parse_events skip tests.
+    fn build_nl_frame(msg_type: u16, payload: &[u8]) -> Vec<u8> {
+        // Netlink header is 16 bytes.
+        let mut frame = Vec::with_capacity(16 + payload.len());
+        let total_len = 16 + payload.len() as u32;
+        frame.extend_from_slice(&total_len.to_ne_bytes());
+        frame.extend_from_slice(&msg_type.to_ne_bytes());
+        frame.extend_from_slice(&0u16.to_ne_bytes()); // flags
+        frame.extend_from_slice(&0u32.to_ne_bytes()); // seq
+        frame.extend_from_slice(&0u32.to_ne_bytes()); // pid
+        frame.extend_from_slice(payload);
+        // Align to 4 bytes.
+        while frame.len() % 4 != 0 {
+            frame.push(0);
+        }
+        frame
+    }
+
+    /// Build a frame with a header that claims more bytes than
+    /// the actual buffer carries — `MessageIter` should report
+    /// the truncation as an Err the event parser silently skips.
+    fn build_truncated_frame(msg_type: u16, claimed_payload_size: usize) -> Vec<u8> {
+        let mut frame = Vec::with_capacity(16);
+        // Claim a payload size that goes beyond what we'll write.
+        let total_len = (16 + claimed_payload_size) as u32;
+        frame.extend_from_slice(&total_len.to_ne_bytes());
+        frame.extend_from_slice(&msg_type.to_ne_bytes());
+        frame.extend_from_slice(&0u16.to_ne_bytes());
+        frame.extend_from_slice(&0u32.to_ne_bytes());
+        frame.extend_from_slice(&0u32.to_ne_bytes());
+        // ... but write NO payload bytes. Iter advances past
+        // the header, then sees the buffer is too short.
+        frame
+    }
+
+    #[test]
+    fn route_parse_events_skips_unknown_msg_type() {
+        // Build a frame with an unknown msg type. Per Plan 193
+        // §2.3, the iterator surfaces it; parse_route_event
+        // returns None; parse_events yields an empty vec rather
+        // than panicking. Pins the kernel-version-forward
+        // compatibility contract.
+        let payload = vec![0u8; 16];
+        let frame = build_nl_frame(0xFFFF, &payload);
+        let events = Route::parse_events(&frame);
+        assert!(events.is_empty(), "unknown msg-type must skip silently");
+    }
+
+    #[test]
+    fn route_parse_events_skips_truncated_frame_without_panic() {
+        // A frame that claims 100 bytes of payload but carries
+        // 0. MessageIter should report the truncation; the
+        // event parser ignores it and yields an empty vec.
+        let frame = build_truncated_frame(NlMsgType::RTM_NEWLINK, 100);
+        let events = Route::parse_events(&frame);
+        // No panic, no infinite loop.
+        let _: Vec<NetworkEvent> = events;
+    }
+
+    #[test]
+    fn route_parse_events_skips_garbage_payload_on_known_msg_type() {
+        // Known msg_type (RTM_NEWLINK) but a 4-byte payload
+        // that won't satisfy IfInfoMsg::SIZE (16 bytes). The
+        // typed parser returns Err; the event parser drops
+        // the result via `.ok()` per the lib's parse contract.
+        let bogus_payload = vec![0xDE, 0xAD, 0xBE, 0xEF];
+        let frame = build_nl_frame(NlMsgType::RTM_NEWLINK, &bogus_payload);
+        let events = Route::parse_events(&frame);
+        // The parser silently dropped the malformed frame —
+        // exactly the "one malformed frame must NOT kill the
+        // subscriber" contract.
+        assert!(
+            events.is_empty(),
+            "malformed payload on known msg-type must skip"
+        );
+    }
+
+    #[test]
+    fn route_parse_events_handles_empty_buffer_without_loop() {
+        // Empty data — must terminate immediately, not spin.
+        let events = Route::parse_events(&[]);
+        assert!(events.is_empty());
+    }
+
     #[test]
     fn event_subscription_is_unpin() {
         fn assert_unpin<T: Unpin>() {}

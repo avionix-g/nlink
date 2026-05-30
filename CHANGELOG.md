@@ -47,6 +47,25 @@ All notable changes to this project will be documented in this file.
   `predicate_io_shape_sweep` test pins the contract for 10
   predicates; future additions inherit it.
 
+- **`MessageIter` infinite loop on truncated / malformed
+  netlink frames (Plan 193 §2.3 + CLAUDE.md §"Parser
+  robustness" rule 2)** — surfaced while writing the
+  parse-events skip regression tests this cycle:
+  `MessageIter::next` returned `Some(Err(...))` on both
+  the `NlMsgHdr::from_bytes` failure and the
+  `msg_len < HDRLEN || msg_len > data.len()` guard, but
+  forgot to advance `self.data` past the malformed
+  bytes. Subsequent `next()` calls returned the same
+  `Err` indefinitely, hanging the long-lived multicast
+  subscribers Plans 185 + 191 introduced. Fix: in both
+  error branches, set `self.data = &[]` before
+  returning so the next poll yields `None`. Bug class
+  matches neli #305 (whole-batch abort on one malformed
+  message) — same shape, different surface. 4 new
+  `stream.rs` tests pin the contract: empty buffer,
+  unknown msg-type, garbage payload on known msg-type,
+  truncated frame.
+
 ### Deprecated
 
 - **`ConfigDiff::summary()` + `NftablesDiff::summary()`
