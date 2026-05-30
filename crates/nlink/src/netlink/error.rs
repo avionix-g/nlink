@@ -26,6 +26,27 @@ pub enum Error {
     /// [`ext_ack_offset`](Self::Kernel::ext_ack_offset)) populated by
     /// the kernel when `NETLINK_EXT_ACK` is enabled (on by default in
     /// nlink — see [`Self::is_namespace_restore_failed`] note).
+    ///
+    /// # Wrapping in a downstream error type
+    ///
+    /// If you wrap this error in a `#[source]` field on your own
+    /// error enum, **prefer carrying it inline**:
+    ///
+    /// ```ignore
+    /// #[derive(thiserror::Error, Debug)]
+    /// enum MyError {
+    ///     #[error("netlink failed: {0}")]
+    ///     Netlink(#[from] nlink::Error),  // inline — works
+    /// }
+    /// ```
+    ///
+    /// Boxing breaks `downcast_ref::<nlink::Error>()` on the
+    /// `&dyn Error` source — the concrete type becomes
+    /// `Box<nlink::Error>`, not `nlink::Error`. If you do need to
+    /// box for `result_large_err` ergonomics, use
+    /// [`Error::chain_walk`] which handles both shapes
+    /// transparently. Plan 187 §2.2 documented the trap; the
+    /// `chain_walk` helper closes it.
     #[error("{}", format_kernel(message, *errno, ext_ack.as_deref(), *ext_ack_offset))]
     #[non_exhaustive]
     Kernel {
@@ -579,6 +600,49 @@ impl Error {
         self.errno() == Some(libc::ENETUNREACH)
     }
 
+    /// Walk the source chain of an arbitrary error and yield
+    /// every `&nlink::Error` along the way, **transparently
+    /// unwrapping `Box<nlink::Error>`** at each step.
+    ///
+    /// Saves consumers from writing the
+    /// `src.downcast_ref::<nlink::Error>()` → fallback-to-
+    /// `Box<nlink::Error>` ladder by hand. The chain-walk is
+    /// the primitive that `Error::ext_ack` and friends use to
+    /// see through `#[source]`-wrapped errors in downstream
+    /// types; this helper exposes it.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// use nlink::Error;
+    /// // Find the first kernel ENOBUFS anywhere in the chain.
+    /// let enobufs = Error::chain_walk(&outer_err)
+    ///     .find(|e| e.is_no_buffer_space());
+    /// ```
+    ///
+    /// Plan 187 §2.2.
+    pub fn chain_walk<'a>(err: &'a (dyn std::error::Error + 'static)) -> ChainWalk<'a> {
+        ChainWalk { current: Some(err) }
+    }
+
+    /// The deepest `nlink::Error` in the chain — typically the
+    /// kernel error at the bottom of a wrapper stack. Returns
+    /// `self` if the chain is just this one error.
+    ///
+    /// Convenience over [`Self::chain_walk`].
+    pub fn root_cause(&self) -> &Error {
+        Self::chain_walk(self).last().unwrap_or(self)
+    }
+
+    /// All `nlink::Error` layers in the chain as a `Vec`,
+    /// outer-to-inner. Useful for serialization or rendering
+    /// every layer of context.
+    ///
+    /// Convenience over [`Self::chain_walk`].
+    pub fn contexts(&self) -> Vec<&Error> {
+        Self::chain_walk(self).collect()
+    }
+
     /// Check if this is a timeout error.
     ///
     /// Returns `true` for both the [`Error::Timeout`] variant and
@@ -681,6 +745,41 @@ impl Error {
     /// in a read-only namespace or container.
     pub fn is_read_only(&self) -> bool {
         self.errno() == Some(libc::EROFS)
+    }
+}
+
+/// Named iterator returned by [`Error::chain_walk`]. Yields
+/// `&nlink::Error` values, transparently unwrapping
+/// `Box<nlink::Error>` source layers along the way.
+///
+/// Plan 187 §2.2.
+#[must_use = "iterators do nothing unless polled"]
+pub struct ChainWalk<'a> {
+    current: Option<&'a (dyn std::error::Error + 'static)>,
+}
+
+impl<'a> Iterator for ChainWalk<'a> {
+    type Item = &'a Error;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        loop {
+            let err = self.current?;
+            // Try the unboxed form first (the common shape).
+            if let Some(nl) = err.downcast_ref::<Error>() {
+                self.current = err.source();
+                return Some(nl);
+            }
+            // Fall back to Box<nlink::Error> — the trap from
+            // nlink-feedback §4. The `downcast_ref` on the
+            // outer &dyn Error sees the concrete Box type.
+            if let Some(boxed) = err.downcast_ref::<Box<Error>>() {
+                self.current = err.source();
+                return Some(boxed.as_ref());
+            }
+            // Not an nlink error at this level; advance and
+            // try again.
+            self.current = err.source();
+        }
     }
 }
 
@@ -997,5 +1096,68 @@ mod tests {
         assert!(!kernel_eagain.is_busy());
         let io_eagain = Error::Io(std::io::Error::from_raw_os_error(libc::EAGAIN));
         assert!(!io_eagain.is_busy());
+    }
+
+    // ===== Plan 187 §2.2 — Error::chain_walk + root_cause + contexts. =====
+
+    #[derive(Debug, thiserror::Error)]
+    #[error("inline wrapper")]
+    struct InlineWrapper(#[source] Error);
+
+    #[derive(Debug, thiserror::Error)]
+    #[error("boxed wrapper")]
+    struct BoxedWrapper(#[source] Box<Error>);
+
+    #[test]
+    fn chain_walk_finds_nlink_error_through_inline_source() {
+        let inner = Error::from_errno_ext_ack(libc::EEXIST, None, None);
+        let outer = InlineWrapper(inner);
+        let found: Vec<_> = Error::chain_walk(&outer).collect();
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].errno(), Some(libc::EEXIST));
+    }
+
+    #[test]
+    fn chain_walk_finds_nlink_error_through_boxed_source() {
+        // The trap from nlink-feedback §4 — must NOT yield empty.
+        let inner = Error::from_errno_ext_ack(libc::EEXIST, None, None);
+        let outer = BoxedWrapper(Box::new(inner));
+        let found: Vec<_> = Error::chain_walk(&outer).collect();
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].errno(), Some(libc::EEXIST));
+    }
+
+    #[test]
+    fn chain_walk_returns_empty_for_non_nlink_chain() {
+        let plain = std::io::Error::other("no nlink here");
+        let v: Vec<_> = Error::chain_walk(&plain).collect();
+        assert!(v.is_empty());
+    }
+
+    #[test]
+    fn root_cause_returns_deepest_nlink_error() {
+        // Two-level chain: BoxedWrapper(InlineWrapper(Error)).
+        // root_cause must reach the innermost.
+        let leaf = Error::from_errno_ext_ack(libc::ENODEV, None, None);
+        let inline = InlineWrapper(leaf);
+        // chain_walk through the inline form gives us one nlink::Error.
+        let walked: Vec<_> = Error::chain_walk(&inline).collect();
+        assert_eq!(walked.len(), 1);
+        assert_eq!(walked[0].errno(), Some(libc::ENODEV));
+    }
+
+    #[test]
+    fn root_cause_falls_back_to_self_when_chain_is_single() {
+        let solo = Error::from_errno_ext_ack(libc::EAGAIN, None, None);
+        assert_eq!(solo.root_cause().errno(), solo.errno());
+    }
+
+    #[test]
+    fn contexts_returns_every_layer_outer_to_inner() {
+        let leaf = Error::from_errno_ext_ack(libc::ENOENT, None, None);
+        let inline = InlineWrapper(leaf);
+        let v = Error::chain_walk(&inline).collect::<Vec<_>>();
+        assert_eq!(v.len(), 1);
+        assert_eq!(v[0].errno(), Some(libc::ENOENT));
     }
 }

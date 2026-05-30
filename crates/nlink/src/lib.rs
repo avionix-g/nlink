@@ -223,6 +223,10 @@ pub use netlink::tc_recipe::{ReconcileOptions, ReconcileReport, StaleObject, Unm
 pub use netlink::{
     Connection, Error, NamespaceSpec, NetworkEvent, Protocol, Result, RtnetlinkGroup,
 };
+// Plan 187 §2.2 — chain-walk iterator + convenience over the
+// `&dyn Error` source chain that handles `Box<nlink::Error>`
+// transparently.
+pub use netlink::ChainWalk;
 // Stream-based event API
 pub use netlink::{EventSource, EventSubscription, OwnedEventStream};
 // Protocol state types

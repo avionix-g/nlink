@@ -131,7 +131,7 @@ pub use attr::{AttrIter, NlAttr};
 pub use batch::{Batch, BatchResults};
 pub use builder::{MessageBuilder, NestToken};
 pub use connection::{Connection, RtnetlinkGroup};
-pub use error::{Error, Result};
+pub use error::{ChainWalk, Error, Result};
 pub use events::NetworkEvent;
 pub use interface_ref::InterfaceRef;
 pub use message::{MessageIter, NLMSG_HDRLEN, NlMsgHdr, NlMsgType};

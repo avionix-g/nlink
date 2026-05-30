@@ -36,6 +36,16 @@ All notable changes to this project will be documented in this file.
 
 ### Added
 
+- **`Error::chain_walk` + `root_cause` + `contexts` (Plan 187 §2.2)** —
+  iterator over the source chain that transparently unwraps
+  `Box<nlink::Error>` (the trap the maintainer hit in their 158b
+  work). Plus two convenience shortcuts: `root_cause()` returns
+  the deepest `nlink::Error` in the chain, `contexts()` collects
+  every layer outer-to-inner. New named `ChainWalk` iterator
+  struct exposed at the crate root. Rustdoc on `Error::Kernel`
+  warns about the boxed-source trap + points consumers at
+  `chain_walk` as the escape hatch.
+
 - **Parser robustness policy + CI gate (Plan 193 — Phase 1)** —
   CLAUDE.md gains a new §"Parser robustness" section
   documenting the three defensive-parsing rules used across
