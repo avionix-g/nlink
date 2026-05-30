@@ -59,6 +59,24 @@ All notable changes to this project will be documented in this file.
 
 ### Added
 
+- **`Connection<Route>::into_events_with_resync` +
+  `subscribe_all_with_resync` + `rtnetlink_snapshot`
+  (Plan 191 §2.5 + §2.6)** — RTNETLINK twin of Plan 185's
+  nftables resync wrappers. The infra (`ConnectionFactory<P>`
+  + `events_with_resync` from Plan 185 + `impl EventSource
+  for Route` + `RtnetlinkGroup` enum from 0.17) was already
+  in place; this commit ships the Route-specific layer:
+  `rtnetlink_snapshot()` walks the current state via the
+  existing `get_links` / `get_addresses` / `get_routes` /
+  `get_neighbors` methods, returning a `Vec<NetworkEvent>`
+  of `New*` variants in the kernel's natural emit order.
+  `Connection<Route>::into_events_with_resync(factory)` is
+  the spawn-friendly owned form; `subscribe_all_with_resync`
+  borrows for caller-held queries. Both subscribe to every
+  rtnetlink multicast group before returning the stream.
+  Closes nlink-feedback §15 + W2 (lab Plan 158d's polling
+  fallback can now become subscribe-based watch).
+
 - **`serde` feature flag — opt-in `Serialize` derives on every
   public diff/result/report type (Plan 189)** — gated by a new
   top-level `serde` feature (opt-in only; included in `full`).
