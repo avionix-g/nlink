@@ -77,6 +77,20 @@ All notable changes to this project will be documented in this file.
   RouteBuilder::default_v4().via("192.0.2.1")
   ```
 
+- **Integration repro for the VLAN parent ifindex race
+  (Plan 186 phase 1)** — three new root-gated tests in
+  `tests/integration/network_config_apply.rs`:
+  `vlan_parent_dummy_in_same_apply_succeeds` (headline),
+  `vlan_parent_dummy_declared_in_either_order` (hash-defeating
+  order; tolerantly records pre-topo-sort behavior),
+  `vlan_parent_already_exists_in_kernel` (control). Plan 186's
+  audit found nlink's `resolve_interface` is netlink-based
+  end-to-end (no cache, no sysfs) — the maintainer's
+  hypotheses were wrong. The integration repro ships as a
+  permanent regression guard; if green, the symptom may not be
+  reproducible in our harness and the topo-sort + ordering
+  docstring still ship as defensive additions.
+
 - **`NetworkConfig::apply_reconcile` (Plan 188 §2.4)** —
   bounded-retry sibling of `NetworkConfig::apply`, mirroring
   `NftablesDiff::apply_reconcile` (Plan 157, 0.16). Retries

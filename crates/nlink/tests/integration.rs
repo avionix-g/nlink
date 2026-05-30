@@ -51,6 +51,13 @@ mod events;
 #[path = "integration/config.rs"]
 mod config;
 
+// Plan 186 — VLAN parent ifindex race repro + topo-sort
+// regression coverage. Lives in its own module so the focused
+// scenarios stay out of the broader `config` integration
+// surface.
+#[path = "integration/network_config_apply.rs"]
+mod network_config_apply;
+
 #[path = "integration/ratelimit.rs"]
 mod ratelimit;
 
