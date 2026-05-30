@@ -520,10 +520,17 @@ async fn create_link(conn: &Connection<Route>, link: &DeclaredLink) -> Result<()
             }
             conn.add_link(config).await?;
         }
-        DeclaredLinkType::Vlan { parent, vlan_id } => {
+        DeclaredLinkType::Vlan {
+            parent,
+            vlan_id,
+            protocol,
+        } => {
             let mut config = VlanLink::new(&link.name, parent, *vlan_id);
             if let Some(mtu) = link.mtu {
                 config = config.mtu(mtu);
+            }
+            if let Some(p) = protocol {
+                config = config.protocol(*p);
             }
             conn.add_link(config).await?;
         }

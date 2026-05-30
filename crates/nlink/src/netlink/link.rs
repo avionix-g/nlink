@@ -647,6 +647,31 @@ pub struct VlanFlags {
     pub mask: u32,
 }
 
+/// VLAN tagging protocol (`IFLA_VLAN_PROTOCOL` wire value).
+///
+/// 802.1Q (Dot1q) is the kernel default; 802.1ad (Dot1ad) is
+/// stacked VLAN encap (Q-in-Q). Plan 190 §2.2.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum VlanProtocol {
+    /// 802.1Q (single-tag).
+    Dot1q,
+    /// 802.1ad (Q-in-Q stacked).
+    Dot1ad,
+}
+
+impl VlanProtocol {
+    /// Wire-format value used in `IFLA_VLAN_PROTOCOL`.
+    /// Big-endian (network byte order) on the wire — callers
+    /// emitting raw attributes must `to_be()` this value.
+    pub fn as_u16(self) -> u16 {
+        match self {
+            Self::Dot1q => 0x8100,
+            Self::Dot1ad => 0x88a8,
+        }
+    }
+}
+
 impl VlanLink {
     /// Create a new VLAN interface configuration.
     ///
@@ -703,6 +728,15 @@ impl VlanLink {
     /// Set to 802.1ad (QinQ) protocol instead of 802.1Q.
     pub fn qinq(mut self) -> Self {
         self.protocol = Some(0x88a8);
+        self
+    }
+
+    /// Set the VLAN tagging protocol via the typed
+    /// [`VlanProtocol`] enum. Defaults to 802.1Q when unset.
+    /// Use [`VlanProtocol::Dot1ad`] for Q-in-Q stacked VLAN
+    /// encap. Plan 190 §2.2.
+    pub fn protocol(mut self, p: VlanProtocol) -> Self {
+        self.protocol = Some(p.as_u16());
         self
     }
 

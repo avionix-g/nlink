@@ -133,7 +133,7 @@ fn test_vlan_link_builder() {
     let link = &config.links()[0];
     assert!(matches!(
         link.link_type(),
-        DeclaredLinkType::Vlan { parent, vlan_id } if parent == "eth0" && *vlan_id == 100
+        DeclaredLinkType::Vlan { parent, vlan_id, .. } if parent == "eth0" && *vlan_id == 100
     ));
 }
 

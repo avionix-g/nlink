@@ -752,7 +752,7 @@ mod tests {
                 "eth0.42",
                 DeclaredLinkType::Vlan {
                     parent: "eth0".into(),
-                    vlan_id: 42,
+                    vlan_id: 42, protocol: None,
                 },
             ),
             declared("eth0", DeclaredLinkType::Dummy),
@@ -774,7 +774,7 @@ mod tests {
                 "eth0.42",
                 DeclaredLinkType::Vlan {
                     parent: "eth0".into(),
-                    vlan_id: 42,
+                    vlan_id: 42, protocol: None,
                 },
             ),
         ];
@@ -796,7 +796,7 @@ mod tests {
                 "eth0.42",
                 DeclaredLinkType::Vlan {
                     parent: "eth0".into(), // not in batch
-                    vlan_id: 42,
+                    vlan_id: 42, protocol: None,
                 },
             ),
         ];
@@ -838,7 +838,7 @@ mod tests {
                 "eth0.42",
                 DeclaredLinkType::Vlan {
                     parent: "eth0".into(),
-                    vlan_id: 42,
+                    vlan_id: 42, protocol: None,
                 },
             ),
             declared("br0", DeclaredLinkType::Bridge), // unrelated

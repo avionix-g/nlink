@@ -2,6 +2,8 @@
 
 use std::net::IpAddr;
 
+pub use crate::netlink::link::VlanProtocol;
+
 /// Declarative network configuration.
 ///
 /// Represents the desired state of network resources. Use the builder methods
@@ -177,8 +179,14 @@ pub enum DeclaredLinkType {
     Veth { peer: String },
     /// Bridge interface.
     Bridge,
-    /// VLAN interface.
-    Vlan { parent: String, vlan_id: u16 },
+    /// VLAN interface. Plan 190 §2.2 added `protocol`.
+    Vlan {
+        parent: String,
+        vlan_id: u16,
+        /// VLAN tagging protocol; `None` == kernel default
+        /// (802.1Q). Use [`VlanProtocol::Dot1ad`] for Q-in-Q.
+        protocol: Option<VlanProtocol>,
+    },
     /// VXLAN interface.
     Vxlan { vni: u32, remote: Option<IpAddr> },
     /// Macvlan interface.
@@ -318,7 +326,19 @@ impl LinkBuilder {
         self.link_type = DeclaredLinkType::Vlan {
             parent: parent.to_string(),
             vlan_id,
+            protocol: None,
         };
+        self
+    }
+
+    /// Set the VLAN tagging protocol. Defaults to 802.1Q
+    /// (kernel default) when unset. Use
+    /// [`VlanProtocol::Dot1ad`] for Q-in-Q stacked VLAN
+    /// encap. Plan 190 §2.2. No-op if the link isn't a VLAN.
+    pub fn vlan_protocol(mut self, p: VlanProtocol) -> Self {
+        if let DeclaredLinkType::Vlan { protocol, .. } = &mut self.link_type {
+            *protocol = Some(p);
+        }
         self
     }
 
@@ -1036,6 +1056,52 @@ mod plan_190_tests {
         let lt = DeclaredLinkType::Vrf { table: 7 };
         assert_eq!(lt.kind(), Some("vrf"));
     }
+
+    // -------- Plan 190 §2.2 — VLAN protocol --------
+
+    #[test]
+    fn vlan_builder_protocol_defaults_to_none() {
+        let link = LinkBuilder::new("eth0.100").vlan("eth0", 100).build();
+        match link.link_type {
+            DeclaredLinkType::Vlan { protocol, .. } => assert!(protocol.is_none()),
+            other => panic!("expected Vlan, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn vlan_builder_protocol_setter_records_dot1ad() {
+        let link = LinkBuilder::new("eth0.100")
+            .vlan("eth0", 100)
+            .vlan_protocol(VlanProtocol::Dot1ad)
+            .build();
+        match link.link_type {
+            DeclaredLinkType::Vlan { protocol, .. } => {
+                assert_eq!(protocol, Some(VlanProtocol::Dot1ad));
+            }
+            other => panic!("expected Vlan, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn vlan_protocol_setter_no_op_on_non_vlan() {
+        // Calling vlan_protocol() on a builder that isn't a
+        // VLAN should leave the link_type unchanged.
+        let link = LinkBuilder::new("eth0")
+            .dummy()
+            .vlan_protocol(VlanProtocol::Dot1ad)
+            .build();
+        assert!(matches!(link.link_type, DeclaredLinkType::Dummy));
+    }
+
+    #[test]
+    fn vlan_protocol_wire_values() {
+        // 802.1Q == 0x8100, 802.1ad == 0x88a8. Pins the wire
+        // contract for IFLA_VLAN_PROTOCOL emission.
+        assert_eq!(VlanProtocol::Dot1q.as_u16(), 0x8100);
+        assert_eq!(VlanProtocol::Dot1ad.as_u16(), 0x88a8);
+    }
+
+    // -------- end Plan 190 §2.2 --------
 
     #[test]
     fn vrf_in_network_config_carries_master_chain() {

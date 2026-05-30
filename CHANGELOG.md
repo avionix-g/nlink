@@ -77,6 +77,19 @@ All notable changes to this project will be documented in this file.
   RouteBuilder::default_v4().via("192.0.2.1")
   ```
 
+- **`LinkBuilder::vlan_protocol(p)` + `VlanProtocol` enum
+  (Plan 190 §2.2)** — declarative-path VLAN protocol selector.
+  The imperative `VlanLink` gains a typed `.protocol(VlanProtocol)`
+  setter alongside the existing `.qinq()` shortcut.
+  `DeclaredLinkType::Vlan` grew a `protocol: Option<VlanProtocol>`
+  field; `None` == kernel default (802.1Q). Use
+  `VlanProtocol::Dot1ad` for Q-in-Q. `VlanProtocol` is
+  `#[non_exhaustive]`. Closes nlink-feedback §12. **Note**:
+  widens `DeclaredLinkType::Vlan` — downstream pattern matches
+  must use `..` rest-pattern (the in-tree integration test
+  config.rs:136 was updated to demonstrate).
+  4 new unit tests.
+
 - **`LinkBuilder::vrf(table)` + `DeclaredLinkType::Vrf`
   (Plan 190 §2.3)** — declarative-path VRF coverage. The
   imperative `VrfLink` shipped already; this lifts it to
