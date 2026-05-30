@@ -626,6 +626,35 @@ async fn create_link(conn: &Connection<Route>, link: &DeclaredLink) -> Result<()
             }
             conn.add_link(config).await?;
         }
+        DeclaredLinkType::Netkit {
+            peer,
+            mode,
+            primary_policy,
+            peer_policy,
+            scrub,
+            peer_scrub,
+        } => {
+            let mut config = crate::netlink::link::NetkitLink::new(&link.name, peer);
+            if let Some(m) = mode {
+                config = config.mode(*m);
+            }
+            if let Some(p) = primary_policy {
+                config = config.policy(*p);
+            }
+            if let Some(p) = peer_policy {
+                config = config.peer_policy(*p);
+            }
+            if let Some(s) = scrub {
+                config = config.scrub(*s);
+            }
+            if let Some(s) = peer_scrub {
+                config = config.peer_scrub(*s);
+            }
+            if let Some(mtu) = link.mtu {
+                config = config.mtu(mtu);
+            }
+            conn.add_link(config).await?;
+        }
         DeclaredLinkType::Physical => {
             // Physical interfaces can't be created, only configured
             // This should not be reached

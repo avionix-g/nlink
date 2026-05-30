@@ -77,6 +77,18 @@ All notable changes to this project will be documented in this file.
   RouteBuilder::default_v4().via("192.0.2.1")
   ```
 
+- **netkit declarative path (kernel 6.7+) — `LinkBuilder::netkit`
+  + `DeclaredLinkType::Netkit` (Plan 190 §2.3a)** —
+  BPF-programmable veth pair. Imperative `NetkitLink` +
+  `NetkitMode` + `NetkitPolicy` + `NetkitScrub` already
+  shipped in 0.16; this lifts them to `NetworkConfig`. Five
+  setters: `netkit_mode` (L2/L3), `netkit_primary_policy` /
+  `netkit_peer_policy` (Forward/Blackhole),
+  `netkit_scrub` / `netkit_peer_scrub` (kernel 6.10+).
+  Enums re-exported via `nlink::netlink::config::types`.
+  Use case: Cilium-style no-bridge service-mesh data plane.
+  3 new unit tests.
+
 - **Bond options gap-fill: `bond_ad_select`, `bond_lacp_rate`,
   `bond_downdelay`, `bond_updelay`, `bond_resend_igmp`
   (Plan 190 §8)** — 5 new declarative-path setters on

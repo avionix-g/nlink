@@ -2,7 +2,10 @@
 
 use std::net::IpAddr;
 
-pub use crate::netlink::link::{AdSelect as BondAdSelect, LacpRate as BondLacpRate, VlanProtocol};
+pub use crate::netlink::link::{
+    AdSelect as BondAdSelect, LacpRate as BondLacpRate, NetkitMode, NetkitPolicy, NetkitScrub,
+    VlanProtocol,
+};
 
 /// Declarative network configuration.
 ///
@@ -229,6 +232,22 @@ pub enum DeclaredLinkType {
     /// forwarding domain. Members enslave via
     /// [`LinkBuilder::master`]. Plan 190 §2.3.
     Vrf { table: u32 },
+    /// Netkit BPF-programmable veth pair (kernel 6.7+).
+    /// Plan 190 §2.3a.
+    Netkit {
+        /// Name of the peer interface.
+        peer: String,
+        /// L2 vs L3 operating mode.
+        mode: Option<NetkitMode>,
+        /// Default policy on the primary peer.
+        primary_policy: Option<NetkitPolicy>,
+        /// Default policy on the peer interface.
+        peer_policy: Option<NetkitPolicy>,
+        /// Scrub mode on the primary peer (kernel 6.10+).
+        scrub: Option<NetkitScrub>,
+        /// Scrub mode on the peer interface (kernel 6.10+).
+        peer_scrub: Option<NetkitScrub>,
+    },
     /// Existing physical interface (not created, only configured).
     Physical,
 }
@@ -246,6 +265,7 @@ impl DeclaredLinkType {
             Self::Bond { .. } => Some("bond"),
             Self::Ifb => Some("ifb"),
             Self::Vrf { .. } => Some("vrf"),
+            Self::Netkit { .. } => Some("netkit"),
             Self::Physical => None,
         }
     }
@@ -542,6 +562,68 @@ impl LinkBuilder {
     /// Create an IFB interface.
     pub fn ifb(mut self) -> Self {
         self.link_type = DeclaredLinkType::Ifb;
+        self
+    }
+
+    /// Build a netkit BPF-programmable veth pair (kernel
+    /// 6.7+). The `peer` argument names the peer interface;
+    /// both ends are created atomically. Use
+    /// [`LinkBuilder::netkit_mode`] / `netkit_primary_policy` /
+    /// `netkit_peer_policy` / `netkit_scrub` /
+    /// `netkit_peer_scrub` to refine. Plan 190 §2.3a.
+    pub fn netkit(mut self, peer: impl Into<String>) -> Self {
+        self.link_type = DeclaredLinkType::Netkit {
+            peer: peer.into(),
+            mode: None,
+            primary_policy: None,
+            peer_policy: None,
+            scrub: None,
+            peer_scrub: None,
+        };
+        self
+    }
+
+    /// Set netkit L2 vs L3 mode. No-op on non-netkit builders.
+    pub fn netkit_mode(mut self, m: NetkitMode) -> Self {
+        if let DeclaredLinkType::Netkit { mode, .. } = &mut self.link_type {
+            *mode = Some(m);
+        }
+        self
+    }
+
+    /// Set the netkit primary-peer default policy. No-op on
+    /// non-netkit builders.
+    pub fn netkit_primary_policy(mut self, p: NetkitPolicy) -> Self {
+        if let DeclaredLinkType::Netkit { primary_policy, .. } = &mut self.link_type {
+            *primary_policy = Some(p);
+        }
+        self
+    }
+
+    /// Set the netkit peer default policy. No-op on
+    /// non-netkit builders.
+    pub fn netkit_peer_policy(mut self, p: NetkitPolicy) -> Self {
+        if let DeclaredLinkType::Netkit { peer_policy, .. } = &mut self.link_type {
+            *peer_policy = Some(p);
+        }
+        self
+    }
+
+    /// Set the netkit primary-peer scrub mode (kernel 6.10+).
+    /// No-op on non-netkit builders.
+    pub fn netkit_scrub(mut self, s: NetkitScrub) -> Self {
+        if let DeclaredLinkType::Netkit { scrub, .. } = &mut self.link_type {
+            *scrub = Some(s);
+        }
+        self
+    }
+
+    /// Set the netkit peer scrub mode (kernel 6.10+). No-op
+    /// on non-netkit builders.
+    pub fn netkit_peer_scrub(mut self, s: NetkitScrub) -> Self {
+        if let DeclaredLinkType::Netkit { peer_scrub, .. } = &mut self.link_type {
+            *peer_scrub = Some(s);
+        }
         self
     }
 
@@ -1167,6 +1249,76 @@ mod plan_190_tests {
         let lt = DeclaredLinkType::Vrf { table: 7 };
         assert_eq!(lt.kind(), Some("vrf"));
     }
+
+    // -------- Plan 190 §2.3a — netkit --------
+
+    #[test]
+    fn netkit_builder_peer_carried_others_default_none() {
+        let link = LinkBuilder::new("nk0").netkit("nk1").build();
+        match link.link_type {
+            DeclaredLinkType::Netkit {
+                peer,
+                mode,
+                primary_policy,
+                peer_policy,
+                scrub,
+                peer_scrub,
+            } => {
+                assert_eq!(peer, "nk1");
+                assert!(mode.is_none());
+                assert!(primary_policy.is_none());
+                assert!(peer_policy.is_none());
+                assert!(scrub.is_none());
+                assert!(peer_scrub.is_none());
+            }
+            other => panic!("expected Netkit, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn netkit_builder_full_setter_chain() {
+        let link = LinkBuilder::new("nk0")
+            .netkit("nk1")
+            .netkit_mode(NetkitMode::L2)
+            .netkit_primary_policy(NetkitPolicy::Forward)
+            .netkit_peer_policy(NetkitPolicy::Blackhole)
+            .netkit_scrub(NetkitScrub::Default)
+            .netkit_peer_scrub(NetkitScrub::None)
+            .build();
+        match link.link_type {
+            DeclaredLinkType::Netkit {
+                peer,
+                mode,
+                primary_policy,
+                peer_policy,
+                scrub,
+                peer_scrub,
+            } => {
+                assert_eq!(peer, "nk1");
+                assert_eq!(mode, Some(NetkitMode::L2));
+                assert_eq!(primary_policy, Some(NetkitPolicy::Forward));
+                assert_eq!(peer_policy, Some(NetkitPolicy::Blackhole));
+                assert_eq!(scrub, Some(NetkitScrub::Default));
+                assert_eq!(peer_scrub, Some(NetkitScrub::None));
+            }
+            other => panic!("expected Netkit, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn netkit_kind_string_is_netkit() {
+        let lt = DeclaredLinkType::Netkit {
+            peer: "x".into(),
+            mode: None,
+            primary_policy: None,
+            peer_policy: None,
+            scrub: None,
+            peer_scrub: None,
+        };
+        assert_eq!(lt.kind(), Some("netkit"));
+    }
+
+    // -------- end Plan 190 §2.3a --------
 
     // -------- Plan 190 §8 — Bond options gap-fill --------
 
