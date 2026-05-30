@@ -3,7 +3,7 @@ subject: nlink plan index — 0.19 cycle
 status: live (update as plans land)
 target version: 0.19.0
 maintainer: p13marc
-created: 2026-05-29 (post-0.18 cut; seven 0.19 plans seeded 2026-05-30 from nlink-feedback.md, expanded to ten plans same day during consolidation pass)
+created: 2026-05-29 (post-0.18 cut; 7 plans seeded 2026-05-30; expanded to 10 plans during first consolidation pass; expanded to 14 plans during second consolidation pass under the "everything in 0.19" directive)
 ---
 
 # Plan index — 0.19 cycle
@@ -24,21 +24,24 @@ cycle's narrative lives in
   push to master.**
 - **Workspace version**: `0.18.0` → bump to `0.19.0` on the
   first PR whose change cargo-semver-checks flags as
-  semver-major. Multiple breaking changes line up:
+  semver-major. Multiple breaking changes:
   Plan 187 (Error factory sign-normalization),
   Plan 188 (ApplyOptions `#[non_exhaustive]`),
   Plan 190 (DeclaredLinkType enum widening),
-  Plan 191 (RouteEvent enum addition).
-  Whichever lands first triggers the bump.
+  Plan 191 (RouteEvent enum addition + deprecation of raw
+  `RtnetlinkGroup` constants),
+  Plan 196 (`WireguardConfig` is net-new but the existing
+  imperative API stays — no break),
+  Plan 198 (`SetKeyType` enum widening).
 - **CI**: open a draft PR `0.19 → master` once the first
   commit lands so the workflow fires on every push.
 - **Seed reports**:
   - [`nlink-feedback.md`](../nlink-feedback.md) (nlink-lab
-    maintainer, 2026-05-30; covers the 158 arc's ~30 friction
-    points)
-  - 0.19 consolidation-pass bug-hunt + kernel-research agents
-    (2026-05-30; surfaced 3 new plans worth of defensive
-    coverage)
+    maintainer, 2026-05-30)
+  - 0.19 first consolidation-pass bug-hunt + kernel research
+    (2026-05-30)
+  - 0.19 second consolidation-pass: WireGuard `wg syncconf` +
+    ovpn DCO + nftables sets research (2026-05-30)
 
 ## Status legend
 
@@ -51,100 +54,89 @@ cycle's narrative lives in
 
 ## Sub-plan table
 
-Ten plans this cycle. Three groups: feedback-driven (186-191
-core), defensive (193-194 from ecosystem audit), kube-rs-shape
-(195 stream combinators).
+Fourteen plans this cycle. Four groups: feedback-driven
+(186-191 core), defensive (193-194 from ecosystem audit),
+kube-rs-shape (195 stream combinators), GENL declarative
+families (196-199 from the "everything in 0.19" directive).
 
 | Plan | Title | Effort | Order | Status | Notes |
 |------|-------|--------|-------|--------|-------|
-| [186](186-vlan-parent-resolution-race-plan.md) | VLAN parent ifindex race — investigation-first + topo-sort + ordering docstring (Items #1, #2, D1) | ~4-12 h | 1 | ⚪ | **HIGH** correctness. Maintainer's cache/sysfs hypotheses confirmed wrong; real cause is non-obvious from code read. Investigation phase = integration repro. |
-| [187](187-error-api-hygiene-plan.md) | `Error` API hygiene — normalize factory sign, `chain_walk` helper, **Io-shape sweep across all `is_*` predicates** (expanded 2026-05-30 from bug-hunt finding) | ~5 h (was 3 h) | 2 | ⚪ | Medium footgun bundle. Single-point fix in `errno()` cascades to ~12 predicates that have the Plan 185 bug class. |
-| [188](188-declarative-apply-parity-plan.md) | Declarative apply parity — `ConfigDiff::apply`, `ApplyOptions` builders, `apply_reconcile`, `default_v{4,6}`, `LinkChanges::Display`, `del_*_if_exists`, **deprecate `summary()`** (folded D6 here) | ~6.5 h (was 6 h) | 3 | ⚪ | Low-priority ergonomic bundle. `ApplyOptions` `#[non_exhaustive]` is a semver break. |
-| [189](189-serde-feature-flag-plan.md) | `serde` feature flag on diff + result + report types (Item #9, W4) | ~3.5 h | 4 | ⚪ | Opt-in feature. JSON shape commits us to kebab-case schema stability. |
-| [190](190-linkbuilder-gaps-plan.md) | `LinkBuilder` gaps — VXLAN local/port/underlay, VLAN protocol, VRF, **+ netkit (6.7), ovpn link half (6.16), IPv4 GSO/GRO caps (6.6)** (expanded 2026-05-30 from kernel research) | ~11.5 h (was 7 h) | 5 | ⚪ | Significantly expanded. Three new kernel link kinds + kernel ABI surface. |
-| [191](191-route-events-with-resync-plan.md) | `Connection<Route>::subscribe` + `RouteEvent` + `into_events_with_resync` — RTNETLINK twin of Plan 185 (Item #15, W2) | ~9.5 h | 6 | ⚪ | **Headline** of 0.19. Mirrors the kube-rs-shaped Plan 185 watcher for RTNETLINK. |
-| [192](192-docs-pass-plan.md) | Doc pass — D1, D4, D5, W7 tracing-span audit, **CLAUDE.md namespace-safety spec** (D6 moved to 188) | ~4.5 h | 7 | ⚪ | Doc + tracing-audit + new sysfs-audit CI gate. |
-| **[193](193-parser-robustness-plan.md)** (**NEW** 2026-05-30) | Parser robustness — accept-larger-than-expected fixed-size structs, multipath/nexthop pathological-input guards, recoverable per-message parse skip + optional cargo-fuzz target | ~7 h | 8 | ⚪ | **Defensive**, preempting CVE-shaped issues other crates hit. References netlink-packet-route #232 + #152 + neli #305. |
-| **[194](194-concurrent-stress-plan.md)** (**NEW** 2026-05-30) | Concurrent stress + seq-routing regression — 16-task interleaved dump test + 16-namespace parallel creation test | ~4.5 h (green path) | 9 | ⚪ | **Defensive**. References rtnetlink #131 (seq routing) + #132 (concurrent ns race). |
-| **[195](195-stream-combinators-plan.md)** (**NEW** 2026-05-30) | `ResyncStreamExt` — `StreamBackoff`, `predicate_filter`, `map_event` mirroring kube-rs `WatchStreamExt` | ~6.5 h | 10 | ⚪ | Composes on top of Plans 185 + 191; doesn't change existing API. Applies to BOTH protocols. |
+| [186](186-vlan-parent-resolution-race-plan.md) | VLAN parent ifindex race — investigation-first + topo-sort + ordering docstring | ~4-12 h | 1 | ⚪ | **HIGH** correctness. Investigation phase = integration repro. |
+| [187](187-error-api-hygiene-plan.md) | `Error` API hygiene — sign normalization + `chain_walk` + Io-shape sweep across all predicates | ~5 h | 2 | ⚪ | Medium footgun bundle. Single-point fix cascades to ~12 predicates. |
+| [188](188-declarative-apply-parity-plan.md) | Declarative apply parity — `ConfigDiff::apply`, builders, `apply_reconcile`, `default_v{4,6}`, idempotent del_*, deprecate `summary()` | ~6.5 h | 3 | ⚪ | Low-priority ergonomic bundle. |
+| [189](189-serde-feature-flag-plan.md) | `serde` feature flag — `Serialize` + `Deserialize` on diffs + JSON Schema via `schemars` + runtime parsed-type `Serialize` | ~5.5 h (was 3.5) | 4 | ⚪ | Opt-in feature; expanded with Deserialize + Schema + runtime types. |
+| [190](190-linkbuilder-gaps-plan.md) | `LinkBuilder` gaps — VXLAN advanced + VLAN protocol + VRF + netkit + ovpn link half + IPv4 GSO/GRO caps + bond options + macvlan Source | ~13 h (was 11.5) | 5 | ⚪ | Significantly expanded; bond options + macvlan Source absorbed. |
+| [191](191-route-events-with-resync-plan.md) | `Connection<Route>::subscribe` + `RouteEvent` (18 variants now including TC + Rule) + `into_events_with_resync` | ~14.5 h (was 9.5) | 6 | ⚪ | **Headline #1** of 0.19. TC + Rule event variants added. |
+| [192](192-docs-pass-plan.md) | Doc pass — D1, D4, D5, W7 universal tracing audit, CLAUDE.md namespace-safety spec | ~6.5 h (was 4.5) | 7 | ⚪ | Universal tracing audit expanded beyond Connection<P>. |
+| [193](193-parser-robustness-plan.md) | Parser robustness — defensive parsing + 5 `cargo-fuzz` targets + `proptest` integration | ~10 h (was 7) | 8 | ⚪ | Defensive; fuzz coverage expanded to 5 targets + proptest. |
+| [194](194-concurrent-stress-plan.md) | Concurrent stress — seq routing + namespace + nftables transaction + ConnectionPool churn | ~7 h (was 4.5) | 9 | ⚪ | Defensive; transaction + pool stress added. |
+| [195](195-stream-combinators-plan.md) | `ResyncStreamExt` — backoff/filter/map + **`reflector`/`Store<K>` + `backon` integration + combinator tracing** | ~10.5 h (was 6.5) | 10 | ⚪ | `Store<K>` reflector pattern + backon + tracing added. |
+| **[196](196-declarative-wireguard-plan.md)** (**NEW**) | Declarative `WireguardConfig` — diff + apply + `wg syncconf` semantics + `LinkBuilder::wireguard` | ~14 h | 11 | ⚪ | **Headline #2**. First Rust crate to ship NetworkConfig-style WG reconciliation. |
+| **[197](197-declarative-ovpn-plan.md)** (**NEW**) | ovpn GENL family — imperative + declarative `OvpnConfig` (kernel 6.16+) | ~17.5 h | 12 | ⚪ | New protocol family. First Rust coverage of ovpn declarative. |
+| **[198](198-declarative-nft-sets-plan.md)** (**NEW**) | Declarative nftables sets — `DeclaredTableBuilder::set` with element diff + concat keys + vmaps | ~11 h | 13 | ⚪ | Closes the last declarative-nftables gap. |
+| **[199](199-wireguard-monitor-plan.md)** (**NEW**) | `Connection<Wireguard>::subscribe` + `WireguardEvent` + `into_events_with_resync` — third member of the watcher trinity | ~10 h | 14 | ⚪ | Composes on Plan 196 + Plan 195. |
 
-Total estimated focused-work: **~63-77 h** (depending on Plan
-186's investigation outcome). Significant expansion from the
-initial 38-45 h estimate after consolidation surfaced the
-parser robustness + concurrent stress + stream combinator
-plans.
+Total estimated focused-work: **~140-155 h** (was ~63-77 h).
+The "everything in 0.19" directive roughly doubled the cycle
+scope. Three new declarative GENL families + WG monitor +
+in-scope expansion of all defensive plans.
 
 ## Cross-plan dependencies + ordering rationale
 
 ```
-186 (HIGH, investigation-first)
- ├─ blocks: nothing structurally; but topo-sort docstring
- │   in 192 references it
- │
-187 (Error API hygiene)
- ├─ enables 188's apply_reconcile to retry on Io-shape EAGAIN
- │
-188 (Apply parity)        189 (serde)        190 (LinkBuilder gaps)
- │                          │                  │
- ├──────────┬───────────────┴──────────────────┘
- │          │
- │     193 (Parser robustness — independent, ship anytime)
- │     194 (Concurrent stress — independent, ship anytime)
- │
-191 (RTNETLINK events) ─────────────┐
-  │                                  │
-  └──> 195 (Stream combinators ─ builds on both 185 + 191)
-                                     │
-192 (Docs + tracing audit) ──────────┘
+193 (parser robustness — sanity gate) ──┐
+194 (concurrent stress — sanity gate) ──┤
+                                         │
+187 (Error API + Io-shape sweep) ────────┤
+                                         │
+188 (apply parity, including 187's      │
+     errno predicate fix in retries) ───┤
+                                         │
+186 (VLAN race investigation) ───────────┤
+                                         │
+190 (LinkBuilder gaps — VRF, netkit,    │
+     ovpn LINK half, bond, macvlan) ────┤
+189 (serde + Deserialize + Schema) ──────┤
+                                         │
+191 (RTNETLINK events — headline #1) ────┤
+195 (stream combinators on 185 + 191) ───┤
+                                         │
+196 (declarative WireguardConfig) ───────┤
+197 (declarative OvpnConfig) ────────────┤
+198 (declarative nft sets) ──────────────┤
+199 (WireGuard monitor — uses 195) ──────┤
+                                         │
+192 (docs + universal tracing audit) ────┘ (cycle closer)
 ```
 
-**Recommended landing order:**
-1. **193 (parser robustness)** first — if fuzz finds a panic,
-   we want to know before piling other work on top.
-2. **194 (concurrent stress)** second — same reason; if the
-   seq-routing test goes red, the fix shape is invasive.
-3. **187 (Error)** third — easy, unblocks 188's
-   `apply_reconcile`.
-4. **188 (apply parity)** fourth — small wins, momentum.
-5. **186 (VLAN race)** fifth — investigation might take a day.
-6. **190 (LinkBuilder gaps)** sixth — significant new code.
-7. **189 (serde)** seventh — independent, can interleave.
-8. **191 (RTNETLINK events)** eighth — the headline. Plan
-   195 composes on top.
-9. **195 (Stream combinators)** ninth.
-10. **192 (Docs + tracing audit)** last — closes the cycle.
+**Recommended landing order (revised for expanded cycle):**
 
-## Cross-plan artifact ownership
-
-The 0.19 cycle has shared infrastructure that needs a single
-owner. Most artifacts live inside an individual plan; these
-are the ones that span:
-
-| Artifact | Owning plan | Notes |
-|---|---|---|
-| `docs/migration_guide/0.18.0-to-0.19.0.md` | Plan 193 creates the stub (lands first) | Each subsequent plan appends its `### Plan 187`, `### Plan 188`, … section. Stub is in place; commit `b8ab3a2` + this consolidation push. |
-| `docs/migration_guide/README.md` row for 0.19 | Plan 193 inserts the row | Polished at cycle cut with cycle highlights. ✓ inserted in this consolidation push. |
-| `CHANGELOG.md ## [Unreleased]` | All plans append; cycle-cut script promotes to `## [0.19.0] - <date>` | Each plan's §9 "Cross-cutting artifacts" lists its specific subsections. |
-| `CLAUDE.md` updates | Each plan owns its own section; no plan should ever delete or substantively rewrite another plan's section without coordination | Currently planned additions: 186 (parent topo-sort), 187 (Io-shape predicate template), 191 (Connection<Route> EventSource), 192 (util::ifname namespace policy), 193 (parser robustness policy), 194 (single-flight discipline), 195 (ResyncStreamExt). |
-| `README.md` updates | Plans 189 (serde feature row), 190 (Library Modules row), 191 (High-Level APIs section), 195 (combinators sub-section) all touch README | Coordinate at PR review time; small per-plan touches. |
-| `.github/workflows/rust.yml` new CI gates | Plans 189 (serde matrix), 192 (tracing + sysfs audit gates), 193 (recv-loop audit gate) | Four new gates total. |
-| `.github/workflows/fuzz.yml` | Plan 193 creates | New workflow; weekly cron. |
-| `scripts/` audit scripts | Plans 192 + 193 | Three new scripts: audit-tracing-instrument, audit-sysfs-in-lib, audit-recv-loop-error-handling. |
-| `docs/recipes/` new recipes | Plans 186 (network-config-declarative), 189 (json-diff-export), 190 (vrf-multitenant + netkit-cilium-style), 191 (route-watch-with-resync), 195 (resync-with-backoff) | Six new recipes. Update `docs/recipes/README.md` index per plan. |
-| `crates/nlink/examples/` new examples | Plans 186 (declarative_vlan_parent), 188 (existing examples updated for ApplyOptions builder), 189 (serialize_diff), 190 (vrf + netkit + vxlan_advanced + ovpn_link), 191 (route_watch_with_resync + route_subscribe), 195 (watch_with_backoff) | Nine new examples + edits to existing. Register each in `crates/nlink/Cargo.toml` per CLAUDE.md audit-example-registration convention. |
+1. **193 (parser robustness + fuzz)** — sanity gate.
+2. **194 (concurrent stress)** — sanity gate.
+3. **187 (Error API)** — needed for 188/196/197's
+   `apply_reconcile` retry classification.
+4. **188 (apply parity)** — small ergonomic wins.
+5. **186 (VLAN race)** — investigation may need a day.
+6. **190 (LinkBuilder gaps)** — much new code; sets up
+   `LinkBuilder::ovpn` for 197.
+7. **189 (serde)** — independent.
+8. **191 (RTNETLINK events)** — headline #1.
+9. **195 (stream combinators)** — composes on 191.
+10. **198 (declarative nft sets)** — closes nftables surface.
+11. **196 (declarative WireGuard)** — substantial.
+12. **197 (declarative ovpn)** — substantial; depends on
+    Plan 190's LinkBuilder::ovpn.
+13. **199 (WireGuard monitor)** — composes on 196 + 195.
+14. **192 (docs + universal tracing audit)** — closes cycle.
 
 ## Wishlist items NOT scoped this cycle
 
 | Item | Why deferred |
 |------|--------------|
-| #11 — Bond options (ad_select, lacp_rate, etc.) | Per nlink-lab maintainer's own note: nlink-lab doesn't need them. Land when another consumer asks. |
-| #13 WireGuard half — `LinkBuilder::wireguard` | Bundle with ovpn GENL family in a 0.20 plan: "GENL-side declarative families". |
-| #14 — Declarative nft sets | nlink-lab doesn't use sets. No downstream signal. |
-| W1 — Dump-cache invalidation hook | Moot if Plan 186's diagnosis is right (no cache exists). |
-| W5 — `Connection::<P>::lazy()` deferred-socket ctor | Belongs in a per-namespace `ConnectionPool` revision; defer. |
-| W9 — Macvlan Source mode | No downstream signal. |
-| kube-rs `reflector` / `Store<K>` | Bigger scope; defer to 0.20+. |
-| More fuzz targets beyond MessageIter | Land incrementally after the message_iter target settles. |
+| _none from feedback_ | All nlink-lab feedback items are now in 0.19. |
+| miri integration | Genuinely out-of-scope; miri doesn't run native syscalls. |
+| Anonymous nft sets (inline rule expressions like `{22, 80, 443}`) | Different shape than named sets (rule-expr layer); future plan. |
+| OvpnConfig under TLS-handshake automation | Belongs in the higher-level OpenVPN userspace control, not in the kernel data-channel layer. |
 
 ## Deprioritized (parked)
 
@@ -152,13 +144,27 @@ are the ones that span:
 |------|------------|
 | [152](152-0.16-integration-showcases-plan.md) | `aya` co-demo + Prometheus exporter + OTel example. Carried since 0.16 without a real adopter signal. Revisit if a downstream asks for it. |
 
+## Cross-plan artifact ownership
+
+The 0.19 cycle has shared infrastructure that needs a single
+owner.
+
+| Artifact | Owning plan | Notes |
+|---|---|---|
+| `docs/migration_guide/0.18.0-to-0.19.0.md` | Plan 193 creates the stub (lands first) | Each plan appends its `### Plan NNN` section. Stub in place. |
+| `docs/migration_guide/README.md` row for 0.19 | Plan 193 inserts the row | ✓ in place. Polished at cycle cut with full highlights. |
+| `CHANGELOG.md ## [Unreleased]` | All plans append; cycle-cut script promotes to `## [0.19.0]` | Each plan §9 lists its subsections. |
+| `CLAUDE.md` updates | Each plan owns its own section | 9 plans contribute sections; coordinate at PR review. |
+| `README.md` updates | Plans 189, 190, 191, 195, 196, 197, 198, 199 all touch README | Small per-plan touches; resolve at PR review. |
+| `.github/workflows/*` CI gates | Plans 189, 192, 193 (4 gates total) + 193 fuzz workflow | One workflow file + matrix entries. |
+| `scripts/audit-*.sh` audit scripts | Plans 192 + 193 (3 scripts) | New `scripts/` entries. |
+| `docs/recipes/*.md` new recipes | Plans 186, 189, 190, 191, 195, 196, 197, 198, 199 | **Nine new recipes**. Update `docs/recipes/README.md` per plan. |
+| `crates/nlink/examples/*.rs` new examples | Plans 186, 188, 189, 190, 191, 195, 196, 197, 198, 199 | **Twelve new examples**. Register each in `crates/nlink/Cargo.toml`. |
+
 ## Known maintainer-tooling bug
 
 _None as of 0.18 cut._ The `wait_for_ci_green` stdout-vs-stderr
-bug from the 0.17.0 cut was fixed in commit `6fb1c96` during the
-0.18.0 cut; the script's Phase 3 capture now works. (The 0.18.0
-cut still ran manually — the script's `confirm()` reads from
-`/dev/tty` and can't run unattended.)
+bug was fixed in 0.18 commit `6fb1c96`.
 
 ## How to update this file
 

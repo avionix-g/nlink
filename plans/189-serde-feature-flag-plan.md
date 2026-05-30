@@ -303,16 +303,46 @@ gate so the gated path doesn't bit-rot.
   enumeration. Downstream JSON consumers should treat
   variant strings as open-set; document.
 
-## 8. Out-of-scope follow-ups
+## 8. In-scope expansions (consolidation pass — all 0.19 deferrals pulled in)
 
-- **`Deserialize` derives** — separate plan when asked.
-- **JSON Schema export** — nlink-lab generates its own schemas
-  for the apply --check envelope. If we want a built-in
-  `nlink::schema::config_diff()` returning a JSON Schema, that's
-  its own plan (would compose with `schemars`).
-- **`Serialize` for runtime parsed types** (`LinkMessage`,
-  `RouteMessage`, etc.) — useful for tools dumping kernel
-  state to JSON. Not in this plan; ask in a follow-up.
+**`Deserialize` derives** — symmetric with `Serialize`. Diff
+types are not user-constructible (they're products of
+`compute_diff`), so round-trip deserialization adds limited
+direct value — but for testing, audit replays, "apply this
+canned diff" workflows, and snapshot-based regression tests
+it's the right shape. Add `cfg_attr(feature = "serde",
+derive(Deserialize))` alongside `Serialize` on every diff
+type. ~50 LOC additional.
+
+**JSON Schema export via `schemars`** — bundle a
+`nlink::schema` module with `schemars`-derived JSON Schema
+2020-12 output for every public diff + report type:
+
+```rust
+// crates/nlink/src/schema.rs (new, feature-gated)
+#![cfg(feature = "schema")]
+pub fn config_diff() -> schemars::Schema { ... }
+pub fn nftables_diff() -> schemars::Schema { ... }
+pub fn apply_result() -> schemars::Schema { ... }
+```
+
+New feature flag `schema = ["dep:schemars", "serde"]`. ~80 LOC
++ snapshot tests that diff against a pinned `.schema.json`
+for stability. Closes the loop with nlink-lab's
+`docs/json-schemas/layered-diff.schema.json` consumer — they
+can now embed nlink's schema directly instead of re-deriving.
+
+**`Serialize` for runtime parsed types** — `LinkMessage`,
+`RouteMessage`, `AddressMessage`, `NeighborMessage`,
+`TcMessage`, `RuleMessage`. Same `cfg_attr` gating. Enables
+dumping kernel state to JSON for inventory tools + audit
+log shipping. Substantial enum surface (~30 types) but each
+derive is one line. ~40 LOC.
+
+## 8b. Out-of-scope follow-ups
+
+- **JSON Schema for parsed messages** — could be a follow-up
+  bundle. Not in this cycle; ask if a consumer needs it.
 
 ## 9. Cross-cutting artifacts
 

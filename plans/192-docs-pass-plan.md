@@ -316,12 +316,31 @@ This is doc + tracing work, no behavioral surface.
   `InterfaceRef` itself (cleanest), with a one-line link from
   each `_by_name` / `_by_index` method docstring back to it.
 
-## 8. Out-of-scope follow-ups
+## 8. In-scope expansions (consolidation pass — universal tracing audit pulled in)
 
-- **Universal `#[tracing::instrument]` on non-Connection
-  types** — TC, namespace, ConnectionPool. Could be a Plan
-  192b if the W7 audit's CI gate stays narrow to Connection;
-  expand the gate later when there's a desire.
+**Universal `#[tracing::instrument]` audit beyond Connection
+— now in scope.** Expand the W7 audit to cover ALL public
+methods in `crates/nlink/src/netlink/`:
+
+- TC layer (`tc.rs`, `filter.rs`, `action.rs`)
+- Namespace primitives (`namespace.rs`, `lab/`)
+- Connection pool (`pool/`)
+- Each `genl/{wireguard,macsec,mptcp,ethtool,nl80211,devlink,dpll,net_shaper}/connection.rs`
+- Netfilter (`netfilter.rs`)
+- xfrm (`xfrm.rs`)
+- Config diff + apply (`config/`)
+- Nftables transaction (`nftables/transaction.rs`)
+
+The audit script is the same shape as the Connection scope but
+broader. Expect ~30-50 methods to surface lacking spans.
++ ~100 LOC of instrumentation across the codebase.
+
+Universal coverage means consumers `RUST_LOG=nlink=debug`
+sees EVERY operation, not just Connection-shaped ones. This
+is what the maintainer asked for in W7.
+
+## 8b. Out-of-scope follow-ups
+
 - **`error.rs` rustdoc additions** — folded into Plan 187,
   not duplicated here.
 - **Recipe revisions** — the recipes were last sweep at 0.16;

@@ -552,15 +552,55 @@ Plan 158e Slice 4's blocker (per the maintainer).
   to set up that address; document the requirement on the
   builder.
 
-## 8. Out-of-scope follow-ups
+## 8. In-scope expansions (consolidation pass — all 0.19 deferrals pulled in)
 
-- **WireGuard `LinkBuilder` (other half of #13)** — split to
-  its own plan. Needs design work on whether peer config goes
-  through `NetworkConfig` (probably no) or via a parallel
-  `WireguardConfig`.
-- **Bond options sparse coverage (#11)** — defer per
-  maintainer's own assessment; no downstream signal.
-- **Macvlan Source mode (W9)** — defer; no downstream signal.
+**Bond options sparse coverage (#11) — now in scope.** The
+maintainer's own note ("nlink-lab doesn't need them") was the
+defer reason; under the "everything in 0.19" directive these
+ship. Six missing knobs (`ad_select`, `lacp_rate`,
+`downdelay`, `updelay`, `resend_igmp`, `arp_validate`):
+
+```rust
+pub enum BondAdSelect { Stable, Bandwidth, Count }
+pub enum BondLacpRate { Slow, Fast }
+
+impl LinkBuilder {
+    pub fn bond_ad_select(self, sel: BondAdSelect) -> Self { ... }
+    pub fn bond_lacp_rate(self, r: BondLacpRate) -> Self { ... }
+    pub fn bond_downdelay(self, ms: u32) -> Self { ... }
+    pub fn bond_updelay(self, ms: u32) -> Self { ... }
+    pub fn bond_resend_igmp(self, count: u32) -> Self { ... }
+}
+```
+
+Imperative `BondLink` already covers these; declarative gap is
+the missing piece. ~50 LOC + wire-shape tests.
+
+**Macvlan Source mode (W9) — now in scope.** Add to the
+existing `MacvlanMode` enum (gated behind `#[non_exhaustive]`
+already):
+
+```rust
+pub enum MacvlanMode {
+    Bridge, Private, Vepa, Passthru,
+    Source,     // NEW — source-MAC filtering
+}
+```
+
+Trivial — one enum variant + apply-path arm + wire-shape test.
+~10 LOC.
+
+## 8b. Out-of-scope follow-ups
+
+- **WireGuard `LinkBuilder` half** — now its own
+  [Plan 196](196-declarative-wireguard-plan.md). The link half
+  is trivial (`LinkBuilder::wireguard()` creating a `wg`-kind
+  RTNETLINK link) but Plan 196 owns the full declarative
+  `WireguardConfig` story including peer config; landing the
+  link half here would create scope friction with 196.
+- **ovpn GENL family declarative coverage** — now its own
+  [Plan 197](197-declarative-ovpn-plan.md) for the same
+  reason.
 
 ## 9. Cross-cutting artifacts
 

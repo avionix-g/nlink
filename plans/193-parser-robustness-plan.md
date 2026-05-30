@@ -321,15 +321,55 @@ jobs:
   weekly cron uses nightly explicitly; the main CI stays on
   stable.
 
-## 8. Out-of-scope follow-ups
+## 8. In-scope expansions (consolidation pass — fuzz coverage broadened)
 
-- **More fuzz targets** — TC parser, GENL family parsers,
-  nftables expression walking. Each adds 50-100 LOC. Land
-  incrementally when the message_iter target has settled.
+**Five fuzz targets total, not one** — pull in the full fuzz
+coverage that was deferred:
+
+```
+fuzz/fuzz_targets/
+├── fuzz_message_iter.rs       (original — top-level netlink frames)
+├── fuzz_link_attrs.rs         (RTNETLINK link attribute parsing)
+├── fuzz_tc_messages.rs        (TC qdisc/class/filter parsing)
+├── fuzz_nftables_expr.rs      (nftables expression walking)
+└── fuzz_genl_messages.rs      (genl message header + family-specific bodies)
+```
+
+Each target adds ~60 LOC + a CI workflow line. Run all five in
+the weekly cron with 10 minutes per target (50 min total).
+
+**Proptest integration** — randomized but structured. Useful
+where the input space has constraints fuzz misses (valid
+netlink frame headers + invalid attribute payloads). One
+prop-test target per parser family. ~100 LOC.
+
+```rust
+// crates/nlink/proptest-regressions/ (new)
+proptest! {
+    #[test]
+    fn message_iter_never_panics_on_valid_header_invalid_body(
+        seq in any::<u32>(),
+        ty in any::<u16>(),
+        body in prop::collection::vec(any::<u8>(), 0..4096),
+    ) {
+        let mut frame = vec![];
+        // Build valid nlmsghdr (len, type, flags, seq, pid)
+        // ... then append `body` as the payload
+        for msg in MessageIter::new(&frame).flatten() {
+            // Must not panic regardless of body content.
+            let _ = msg;
+        }
+    }
+}
+```
+
+## 8b. Out-of-scope follow-ups
+
 - **`miri` integration** — would catch undefined behavior in
-  the `zerocopy` casts. Substantial CI cost; defer.
-- **Proptest integration** — randomized but structured (vs
-  fuzz's pure random). Useful complement; defer.
+  the `zerocopy` casts. Substantial CI cost AND `miri` doesn't
+  run native syscalls so most of our code path is untestable
+  under it. Genuinely out of scope; not just a "we'll get to
+  it" deferral.
 
 ## 9. Cross-cutting artifacts
 

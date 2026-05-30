@@ -524,16 +524,44 @@ shape, swap `Nftables` for `Route`. Covers:
   must include `_ => ...` (the standard `#[non_exhaustive]`
   contract).
 
-## 8. Out-of-scope follow-ups
+## 8. In-scope expansions (consolidation pass — TC + Rule events pulled in)
 
-- **TC event variants** — `NewTfilter`/`DelTfilter`/
-  `NewQdisc`/`DelQdisc` etc. Useful for TC change tracking
-  but no current consumer.
-- **Rule event variants** — `NewRule`/`DelRule` (the
-  `ip rule` lineage). Same — no consumer.
-- **`Connection<Wireguard>` / `Connection<Generic>`
-  equivalents** — WireGuard's monitor stream is its own
-  shape; defer to a separate plan.
+**TC event variants — now in scope.** RTNETLINK emits
+`RTM_NEWQDISC` / `RTM_DELQDISC` / `RTM_NEWTFILTER` /
+`RTM_DELTFILTER` / `RTM_NEWTCLASS` / `RTM_DELTCLASS` /
+`RTM_NEWCHAIN` / `RTM_DELCHAIN` (TC chain) — eight TC mutation
+events. Add to `RouteEvent`:
+
+```rust
+NewQdisc(TcMessage), DelQdisc(TcMessage),
+NewTclass(TcMessage), DelTclass(TcMessage),
+NewTfilter(TcMessage), DelTfilter(TcMessage),
+NewTcChain(TcMessage), DelTcChain(TcMessage),
+```
+
+(+ `RtnetlinkGroup::Tc` already exists per §2.1.) Eight new
+variants, eight match arms in `parse_route_event`, eight
+parser dispatches. ~60 LOC + tests.
+
+**Rule event variants — now in scope.** `RTM_NEWRULE` /
+`RTM_DELRULE` (the `ip rule` lineage). Two new variants:
+
+```rust
+NewIpRule(RuleMessage), DelIpRule(RuleMessage),
+```
+
+(+ `RtnetlinkGroup::{Ipv4Rule, Ipv6Rule}` already exist.)
+~20 LOC.
+
+Total RouteEvent count goes from 8 → 18 variants. Still
+`#[non_exhaustive]`.
+
+## 8b. Out-of-scope follow-ups
+
+- **`Connection<Wireguard>` event subscription** — now its
+  own [Plan 199](199-wireguard-monitor-plan.md). Different
+  GENL family, different multicast group, different shape;
+  not a simple addition to this plan.
 - **W1 (dump-cache invalidation)** — moot if Plan 186's
   diagnosis lands cleanly. If a real cache turns out to be
   needed, the resync stream itself is the natural place

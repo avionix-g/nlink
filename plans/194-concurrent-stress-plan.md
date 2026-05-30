@@ -284,15 +284,54 @@ fn connection_route_is_send_but_check_sync_status() {
   runtime would serialize the spawn'd tasks and miss the
   race. Configure `worker_threads = 4`.
 
-## 8. Out-of-scope follow-ups
+## 8. In-scope expansions (consolidation pass — broader stress coverage)
 
-- **Stress testing nftables Transaction commit concurrency**
-  — if multiple writers commit to the same table from
-  different connections, do batches see consistent state?
-  Different bug class; defer.
-- **`ConnectionPool` under high churn** — Plan 159
-  delivered the pool; high-churn behavior wasn't part of
-  Plan 162's invalidate test. Could be a follow-up.
+**nftables Transaction commit concurrency — now in scope.**
+Multiple writers committing to the same table from different
+connections is a real-world pattern (Kubernetes operators,
+multi-tenant firewalls). Test that batches see consistent
+state — no partial commits leaking across writers.
+
+```rust
+#[tokio::test(flavor = "multi_thread")]
+async fn ten_concurrent_transactions_same_table_all_succeed_or_all_fail() {
+    require_root!();
+    nlink::require_modules!("nf_tables");
+
+    // 10 writers, each commits a 5-rule transaction to the
+    // same chain. Assert: all 10 transactions succeed AND
+    // the final rule count is 50 (no partial commits / no
+    // lost-update). Run twice to verify no inter-test state.
+    ...
+}
+```
+
+~50 LOC + the test.
+
+**ConnectionPool under high churn — now in scope.** Plan
+162's invalidate test was scoped to single invalidate; not
+to high-churn cycles. Test 1000 acquire/release/invalidate
+cycles in parallel across 16 tasks:
+
+```rust
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn pool_1000_acquire_release_invalidate_cycles() {
+    require_root!();
+    // 16 tasks × 1000 cycles each. Each cycle:
+    //   - acquire from pool
+    //   - do one operation (get_links)
+    //   - 25% chance: invalidate; 75% chance: release
+    // Assert: pool stays healthy throughout (no leaks, no
+    // capacity exhaustion, no panics).
+    ...
+}
+```
+
+~80 LOC + the test.
+
+## 8b. Out-of-scope follow-ups
+
+_None — both follow-ups absorbed in §8._
 
 ## 9. Cross-cutting artifacts
 

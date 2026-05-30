@@ -377,19 +377,75 @@ combinator coverage there would just bloat already-slow tests.
   pre-map type. Document; the kube-rs equivalent has the
   same ordering constraint.
 
-## 8. Out-of-scope follow-ups
+## 8. In-scope expansions (consolidation pass — all 0.19 deferrals pulled in)
 
-- **`reflector` / store pattern**: kube-rs ships a
-  `Store<K>` that maintains an in-memory view of the
-  watched objects. Useful for higher-level abstractions but
-  bigger scope. Defer to 0.20 or later.
-- **Backoff with `backon` crate**: backon is the canonical
-  Rust backoff library. Could re-export `BackoffPolicy` as
-  a `backon::Backoff` to compose with external policy.
-  Defer; our default policy is enough for now.
-- **Tracing instrumentation on the combinators**: per-event
-  spans would help debugging but add cost. Defer to a
-  follow-up when a consumer asks.
+**`reflector` / `Store<K>` pattern — now in scope.** The
+kube-rs `reflector(store, stream)` adapter maintains an
+in-memory view of the watched objects, indexed by a
+user-supplied key function. Consumers query the store for
+"what's the current state?" without re-dumping. This is the
+foundation for the next tier of declarative tooling.
+
+```rust
+// crates/nlink/src/netlink/resync_ext.rs
+
+/// A reflected view of a resync stream's current state.
+/// Indexed by a user-supplied key function; updated by the
+/// background stream consumer.
+pub struct Store<K, T>
+where K: Hash + Eq, T: Clone,
+{
+    inner: Arc<RwLock<HashMap<K, T>>>,
+}
+
+impl<K, T> Store<K, T> {
+    pub fn get(&self, key: &K) -> Option<T> { ... }
+    pub fn snapshot(&self) -> Vec<T> { ... }
+    pub fn len(&self) -> usize { ... }
+}
+
+/// Spawn a background task that consumes the stream and
+/// keeps `store` in sync. Returns the store handle and a
+/// `JoinHandle` for the background task.
+pub fn reflector<S, T, K, F>(
+    stream: S,
+    key_fn: F,
+) -> (Store<K, T>, tokio::task::JoinHandle<crate::Result<()>>)
+where
+    S: Stream<Item = crate::Result<ResyncedEvent<T>>> + Send + 'static,
+    K: Hash + Eq + Send + Sync + 'static,
+    T: Clone + Send + Sync + 'static,
+    F: Fn(&T) -> K + Send + Sync + 'static,
+{ ... }
+```
+
+Mirrors the kube-rs shape exactly. ~150 LOC + tests.
+
+**`backon` integration — now in scope.** `backon` is the
+canonical Rust backoff library. Expose `BackoffPolicy` as a
+`backon::Backoff` implementation so consumers can swap in
+custom policies (Fibonacci, constant, jittered exponential,
+etc.) without reimplementing:
+
+```rust
+#[cfg(feature = "backon")]
+impl backon::Backoff for BackoffPolicy {
+    fn next(&mut self) -> Option<Duration> { ... }
+}
+
+// Allows: .backoff_with(backon::FibonacciBuilder::default().build())
+```
+
+New optional feature `backon = ["dep:backon"]`. ~30 LOC.
+
+**Combinator tracing — now in scope.** Per-event spans via
+`#[tracing::instrument]` on the inner `poll_next` of each
+combinator. Lets consumers `RUST_LOG=nlink::stream=trace` to
+see exactly which combinator drops vs forwards what. ~50 LOC.
+
+## 8b. Out-of-scope follow-ups
+
+_None — all three follow-ups absorbed in §8._
 
 ## 9. Cross-cutting artifacts
 
