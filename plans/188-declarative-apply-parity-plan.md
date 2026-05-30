@@ -29,6 +29,7 @@ impression nlink-lab reported.
 | #16 | low | `NetworkConfig::apply_reconcile` parity with `NftablesConfig` |
 | W6 | low | `LinkChanges::Display` for the diff row |
 | W8 | low | `del_table_if_exists` / `del_chain_if_exists` / `del_rule_if_exists` |
+| D6 | low | deprecate `ConfigDiff::summary` / `NftablesDiff::summary` in favor of `Display` (moved here from Plan 192 during consolidation) |
 
 ## 2. The change — by sub-item
 
@@ -216,7 +217,36 @@ Integrates with `ConfigDiff::Display` via
 `writeln!(f, "  ~ {} ({})", name, changes)` instead of the
 current `~ {name}` placeholder.
 
-### 2.6 Idempotent `del_*_if_exists` (W8)
+### 2.6 Deprecate `summary()` in favor of `Display` (D6)
+
+Plan 183 (0.18) made `Display` wrap `summary()` byte-for-byte
+— the two are equivalent. But the naming asymmetry (one
+method on the diff, one trait impl) confuses consumers (the
+nlink-lab maintainer flagged this as D6). Pick the
+`Display` shape — the canonical Rust idiom — and deprecate
+the older method:
+
+```rust
+// crates/nlink/src/netlink/config/diff.rs
+impl ConfigDiff {
+    /// Render a human-readable summary of the diff.
+    ///
+    /// Equivalent to `format!("{}", self)`; both share the
+    /// same renderer.
+    #[deprecated(
+        since = "0.19.0",
+        note = "use `format!(\"{}\")` or `diff.to_string()` via the Display impl"
+    )]
+    pub fn summary(&self) -> String {
+        self.to_string()
+    }
+}
+```
+
+Same on `NftablesDiff::summary`. Two-release deprecation
+cycle — removed in 0.20.
+
+### 2.7 Idempotent `del_*_if_exists` (W8)
 
 Three new methods on `Connection<Nftables>`:
 

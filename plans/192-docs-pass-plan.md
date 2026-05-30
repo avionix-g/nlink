@@ -1,30 +1,34 @@
 ---
 to: nlink maintainers
-from: nlink-lab feedback `nlink-feedback.md` D1 + D4 + D5 + D6 + W7 (2026-05-30)
-subject: documentation pass — VLAN-parent ordering, `InterfaceRef::Name` netns pitfall, `ApplyOptions` defaults, `summary()` vs `Display`, `Connection<P>::span()` audit
+from: nlink-lab feedback `nlink-feedback.md` D1 + D4 + D5 + W7 (2026-05-30) + 0.19 consolidation-pass (D6 moved out, CLAUDE.md namespace-safety spec added)
+subject: documentation pass — VLAN-parent ordering, `InterfaceRef::Name` netns pitfall, `ApplyOptions` defaults, `Connection<P>::span()` audit, CLAUDE.md namespace-safety spec
 status: queued for 0.19 — low (doc-only, except W7 audit)
 target version: 0.19.0
 parent: (none — bundled doc work)
-source: nlink-lab `nlink-feedback.md` D1, D4, D5, D6, W7
-created: 2026-05-30
+source: nlink-lab `nlink-feedback.md` D1, D4, D5, W7 (D6 folded into Plan 188); 0.19 consolidation-pass bug-hunt added CLAUDE.md namespace-safety spec
+created: 2026-05-30 (consolidated same day)
 ---
 
-# Plan 192 — Documentation + tracing-span audit
+# Plan 192 — Documentation + tracing-span audit + namespace-safety spec
 
 ## 1. Why this plan exists
 
-Five documentation-shaped asks from the 158-arc feedback,
+Four documentation-shaped asks from the 158-arc feedback,
 none of which materially changes nlink's behavior but each of
 which would save a downstream consumer's debug cycle. Plus a
 single low-effort audit (W7 — `#[tracing::instrument]` coverage
-on public methods) that's small enough to bundle here rather
-than splitting into its own plan. Plan 165 in the 0.16 cycle
-was the same shape.
+on public methods) and a CLAUDE.md spec section (from the
+0.19 bug-hunt's namespace-safety finding) that are small
+enough to bundle here. Plan 165 in the 0.16 cycle was the
+same shape.
 
-Items D2 and D3 are not in this plan — they're folded into
-Plan 187 (Error API hygiene) because the rustdoc lives on
-`Error::Kernel` next to the factory + `chain_walk` code being
-added there.
+Items moved out during the 0.19 consolidation pass:
+- **D2 and D3** → folded into Plan 187 (Error API hygiene)
+  because the rustdoc lives on `Error::Kernel` next to the
+  factory + `chain_walk` code being added there.
+- **D6** (deprecate `summary()`) → folded into Plan 188
+  (Declarative apply parity) because the deprecation is
+  applied to the same diff types Plan 188 already touches.
 
 ## 2. The changes
 
@@ -124,24 +128,13 @@ become one-liners pointing at the shared section.
 Folds with Plan 188 §2.2 (the `with_*` builder additions); we
 ship both together.
 
-### 2.4 D6 — `ConfigDiff::summary()` vs `Display`
+### 2.4 D6 — moved to Plan 188
 
-Plan 183 (0.18) made `Display` wrap `summary()` byte-for-byte,
-so the two are equivalent in output. But the naming asymmetry
-confuses the user. Two ship-options:
-
-**(a) Deprecate `summary()`.** Add `#[deprecated(since="0.19.0",
-note="use Display via `format!(\"{diff}\")` or `diff.to_string()`")]`
-on both `ConfigDiff::summary` and `NftablesDiff::summary`. Drop
-in 0.20.
-
-**(b) Keep both, document the equivalence.** One-line note on
-`summary()`: "Equivalent to `format!(\"{}\", self)`; both share
-the same renderer. Prefer the `Display` form for new code."
-
-Pick **(a)** — the 0.19 cycle has backcompat-freedom, and the
-`Display` shape is the canonical Rust idiom. Two-release
-deprecation cycle (deprecated in 0.19, removed in 0.20).
+The deprecation of `ConfigDiff::summary` / `NftablesDiff::summary`
+moved to Plan 188 §2.6 during the 0.19 consolidation pass —
+Plan 188 already touches these types via the new
+`ConfigDiff::apply` inherent method, so bundling the
+deprecation there avoids cross-plan coordination.
 
 ### 2.5 W7 — `#[tracing::instrument]` audit on public `Connection<P>` methods
 
@@ -175,6 +168,54 @@ The attribute is `~3 lines per method`. Total ~50 LOC.
 Listed for completeness; the rustdoc lives in `error.rs` next
 to the `Error::Kernel` variant + the `from_errno_ext_ack`
 factory. Plan 187 handles both.
+
+### 2.7 CLAUDE.md namespace-safety spec (consolidation-pass addition)
+
+The 0.19 bug-hunt agent surfaced that `util::ifname` reads
+`/sys/class/net/` and is namespace-unsafe when called from
+threads bound to a non-host netns. The risk is currently
+documented per-method in `link.rs` (~12 "namespace-safe
+variant" docstrings — see D4 above for the cleanup), but
+there's no centralized spec.
+
+Add a CLAUDE.md section under the existing namespace-safety
+strategic section (Plan 155.4):
+
+```markdown
+### `util::ifname` sysfs reads — namespace policy
+
+`util::ifname::{name_to_index, index_to_name, list_interfaces}`
+read from `/sys/class/net/` in the **calling process's mount
+namespace**. They are only used by the `bins/` CLI tools and
+never by internal library paths (audit 2026-05-30, Plan 186 §1).
+
+For library code touching foreign netns, the policy is:
+
+1. Use `Connection::get_link_by_name` (netlink-based, ifindex
+   resolved through `RTM_GETLINK`).
+2. Or use the `_by_index` API variants and pre-resolve the
+   ifindex via the connection.
+
+`util::ifname` will return a Future kernel ABI change.
+Internal callers that drift back to sysfs must be flagged
+in code review — see `scripts/audit-sysfs-in-lib.sh`.
+```
+
+Plus ship the audit script (~30 LOC bash):
+
+```bash
+#!/usr/bin/env bash
+# scripts/audit-sysfs-in-lib.sh
+# Fails CI if any /sys/class/net/ or /proc/sys/ read appears
+# in crates/nlink/src/netlink/ outside the explicitly-allowed
+# files (sysctl.rs is the documented exception).
+set -euo pipefail
+ALLOWED=(crates/nlink/src/netlink/sysctl.rs)
+... grep + diff ...
+```
+
+Add the script to the CI workflow as a new audit gate
+matching the existing "audit example registration" shape.
 
 ## 3. Implementation phases
 

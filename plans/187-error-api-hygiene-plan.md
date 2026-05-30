@@ -1,20 +1,20 @@
 ---
 to: nlink maintainers
-from: nlink-lab feedback `nlink-feedback.md` §3 + §4 + D2 + D3 (2026-05-30)
-subject: `Error` API hygiene — normalize `from_errno_*` sign convention + `Error::chain_walk` helper + Box-source rustdoc
-status: queued for 0.19 — medium (footgun bundle)
+from: nlink-lab feedback `nlink-feedback.md` §3 + §4 + D2 + D3 (2026-05-30) + 0.19 consolidation-pass bug-hunt (2026-05-30)
+subject: `Error` API hygiene — normalize `from_errno_*` sign convention + `Error::chain_walk` helper + Io-shape sweep across `is_*` predicates + Box-source rustdoc
+status: queued for 0.19 — medium (footgun bundle, expanded during consolidation)
 target version: 0.19.0
 parent: (none — single-deliverable plan)
-source: nlink-lab `nlink-feedback.md` §3 (sign convention), §4 (Box source), D2 + D3 docs
-created: 2026-05-30
+source: nlink-lab `nlink-feedback.md` §3 (sign convention), §4 (Box source), D2 + D3 docs; consolidation bug-hunt surfaced 5 more predicates with the same Plan 185 `is_no_buffer_space` Io-shape bug
+created: 2026-05-30 (expanded same day during consolidation pass)
 ---
 
 # Plan 187 — `Error` API hygiene
 
 ## 1. Why this plan exists
 
-Two distinct footguns the maintainer hit during the 158b
-`Error::ext_ack` work, with related doc improvements:
+Three distinct footguns from the 158b `Error::ext_ack` work +
+related ergonomic gaps:
 
 1. **`Error::from_errno_ext_ack` silently negates the input.**
    The signature reads `errno: i32` so a tester reasonably passes
@@ -31,11 +31,30 @@ Two distinct footguns the maintainer hit during the 158b
    `result_large_err`. Not strictly nlink's bug but the chain
    walk is nlink's contract, so the fix lives here.
 
+3. **Five `Error::is_*` predicates have the same Io-shape gap
+   that Plan 185 caught for `is_no_buffer_space`.** The bug-hunt
+   pass during the 0.19 consolidation surfaced
+   `is_busy`, `is_try_again`, `is_already_exists`,
+   `is_permission_denied`, `is_connection_refused`,
+   `is_not_found`, and the rest of the predicate family. All
+   delegate to `self.errno()`, which only returns `Some(_)` for
+   `Error::Kernel*` variants — never for `Error::Io(io_err)`
+   carrying the same errno via `raw_os_error()`. Same-shape bug
+   as 185, broader blast radius: `is_try_again` is used by
+   `NftablesConfig::apply_reconcile` and a future
+   `NetworkConfig::apply_reconcile` (Plan 188); a raw `EAGAIN`
+   from the socket layer would silently fail the retry
+   classification.
+
 The bundle ships:
 - Sign normalization on the factory (eliminates the footgun by
   construction)
 - A public `Error::chain_walk` helper that knows about
   `Box<nlink::Error>` so consumers don't have to handle it
+- **Refactor `Error::errno()` itself to return the
+  `raw_os_error()` for `Error::Io` variants** — single change
+  fixes every predicate at once + every future predicate
+  inherits the right behavior
 - Rustdoc additions on `Error::Kernel` warning about the
   Box-source trap, and the sign-convention factory docs
 
@@ -196,6 +215,51 @@ Same note on `Error::KernelWithContext`.
 
 Covered by §2.1's docstring rewrite. No extra entry needed.
 
+### 2.5 Single-point Io-shape fix on `Error::errno()`
+
+Bug-hunt finding: every `is_*` predicate today reads
+`self.errno()`, which only handles `Error::Kernel*`. A raw
+`Error::Io(io_err)` carries the same errno via
+`raw_os_error()`, but `errno()` returns `None` for that
+variant. Plan 185 fixed `is_no_buffer_space` by checking both
+shapes inline; the right fix is **one level up** — let
+`errno()` itself unwrap `Io`, and every predicate inherits
+the correct behavior:
+
+```rust
+// crates/nlink/src/netlink/error.rs (existing errno fn)
+
+/// Get the POSIX errno value if this error carries one.
+///
+/// Handles three shapes:
+/// - `Error::Kernel { errno, .. }` — from `NLMSGERR`.
+/// - `Error::KernelWithContext { errno, .. }` — context-wrapped.
+/// - `Error::Io(io_err)` — from raw socket-layer errors;
+///   reads `io_err.raw_os_error()`. This is the shape
+///   `recvmsg` returns `-ENOBUFS` in (the Plan 185 bug).
+///
+/// Returns `None` for the other variants (Timeout, Truncated,
+/// InvalidMessage, etc.) — they don't carry an errno.
+pub fn errno(&self) -> Option<i32> {
+    match self {
+        Self::Kernel { errno, .. }
+        | Self::KernelWithContext { errno, .. } => Some(*errno),
+        Self::Io(io_err) => io_err.raw_os_error(),
+        _ => None,
+    }
+}
+```
+
+The Plan 185 special-case in `is_no_buffer_space` becomes
+dead code; remove it. Every other predicate (~12 of them)
+inherits the fix without per-method changes.
+
+This **subsumes** the Plan 185 `is_no_buffer_space` defensive
+fix as a single-point repair. Cross-reference the 0.18
+CHANGELOG entry: the 185 fix stays in place (it shipped) but
+the `if let Self::Io(...)` branch in the predicate becomes
+redundant.
+
 ## 3. Implementation phases
 
 | Phase | Files | LOC |
@@ -204,8 +268,9 @@ Covered by §2.1's docstring rewrite. No extra entry needed.
 | 2 — `Error::chain_walk` + `ChainWalk` iterator | `error.rs` | ~50 |
 | 3 — switch `ext_ack`/`errno`/`ext_ack_offset` accessors to use chain_walk internally | `error.rs` | ~10 net |
 | 4 — Rustdoc on `Error::Kernel*` variants | `error.rs` | ~15 lines docs |
-| 5 — Tests (see §4) | `error.rs` | ~80 |
-| **Total** | | **~170 LOC** |
+| 5 — `errno()` Io-shape unwrap + remove Plan 185 defensive branch from `is_no_buffer_space` | `error.rs` | ~10 net |
+| 6 — Tests (see §4) | `error.rs` | ~140 (was ~80) |
+| **Total** | | **~240 LOC** (was ~170) |
 
 ## 4. Tests
 
@@ -324,13 +389,75 @@ fn ext_ack_works_through_boxed_source_wrapper() {
 }
 ```
 
-### 4.4 No integration tests required
+### 4.4 Unit — Io-shape predicate sweep
 
-The factory + chain-walk path has no kernel surface to exercise.
-The existing root-gated integration suite already verifies
-real-world chain-walk works (it's used implicitly by every
-operation that produces an `Error::Kernel` and gets surfaced
-through a wrapping context).
+For every predicate, test BOTH shapes (kernel + Io) produce
+the correct answer. This is the bug-class regression suite —
+adding a new `is_*` predicate later inherits the test
+template:
+
+```rust
+// Pair-test template: applied to all 12 predicates.
+
+#[test]
+fn is_busy_matches_kernel_ebusy() {
+    let e = Error::from_errno_ext_ack(libc::EBUSY, None, None);
+    assert!(e.is_busy(), "Kernel(EBUSY) must be is_busy");
+}
+
+#[test]
+fn is_busy_matches_io_ebusy() {
+    let e = Error::Io(std::io::Error::from_raw_os_error(libc::EBUSY));
+    assert!(e.is_busy(), "Io(EBUSY) must be is_busy");
+}
+
+#[test]
+fn is_busy_rejects_unrelated_errno() {
+    let e = Error::Io(std::io::Error::from_raw_os_error(libc::ENOENT));
+    assert!(!e.is_busy());
+}
+
+// Same pattern for: is_no_buffer_space, is_try_again,
+// is_already_exists, is_permission_denied,
+// is_connection_refused, is_not_found, is_invalid_argument,
+// is_no_device, is_not_supported, is_network_unreachable,
+// is_host_unreachable.
+//
+// = 12 predicates × 3 tests each = 36 sweep tests.
+```
+
+The shared test fixture (a helper that takes a predicate fn
+pointer + an errno + tests both shapes) keeps this from
+becoming 36 × N LOC:
+
+```rust
+fn assert_predicate_matches_both_shapes(
+    pred: fn(&Error) -> bool,
+    errno: i32,
+    name: &str,
+) {
+    let kernel = Error::from_errno_ext_ack(errno, None, None);
+    assert!(pred(&kernel), "{name}: Kernel({errno}) must match");
+    let io = Error::Io(std::io::Error::from_raw_os_error(errno));
+    assert!(pred(&io), "{name}: Io({errno}) must match");
+}
+
+#[test]
+fn predicate_io_shape_sweep() {
+    assert_predicate_matches_both_shapes(Error::is_busy, libc::EBUSY, "is_busy");
+    assert_predicate_matches_both_shapes(Error::is_try_again, libc::EAGAIN, "is_try_again");
+    assert_predicate_matches_both_shapes(Error::is_already_exists, libc::EEXIST, "is_already_exists");
+    // ... etc. — 12 entries.
+}
+```
+
+### 4.5 No integration tests required
+
+The factory + chain-walk + predicate path has no kernel
+surface to exercise. The existing root-gated integration
+suite already verifies real-world chain-walk works (it's
+used implicitly by every operation that produces an
+`Error::Kernel` and gets surfaced through a wrapping context).
 
 ## 5. Acceptance criteria
 
@@ -342,8 +469,12 @@ through a wrapping context).
 - [ ] `Error::ext_ack` / `errno` / `ext_ack_offset` use
       `chain_walk` internally so they work through wrapper
       layers (cleaner than the current ad-hoc `downcast_ref`).
+- [ ] `Error::errno()` unwraps `Error::Io` via `raw_os_error()`;
+      Plan 185's defensive branch in `is_no_buffer_space`
+      removed.
 - [ ] 4 sign-normalization tests + 4+ chain-walk tests + 1+
-      accessor-through-box tests.
+      accessor-through-box test + 36+ predicate Io-shape
+      sweep tests via the shared assertion helper.
 - [ ] Rustdoc note on `Error::Kernel` and
       `Error::KernelWithContext` about the boxed-source caveat
       + the `chain_walk` escape hatch.
@@ -351,6 +482,8 @@ through a wrapping context).
       normalization (consumers asserting `Some(-1)` from a
       `from_errno_ext_ack(1, ...)` call break — that's the
       intent).
+- [ ] CHANGELOG `### Fixed` entry for the predicate Io-shape
+      sweep (the broader Plan 185 bug class).
 - [ ] Migration guide `0.18.0-to-0.19.0.md` entry.
 
 ## 6. Effort estimate

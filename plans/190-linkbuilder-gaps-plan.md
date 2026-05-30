@@ -1,33 +1,43 @@
 ---
 to: nlink maintainers
-from: nlink-lab feedback `nlink-feedback.md` §10 + §12 + §13-VRF (2026-05-30)
-subject: `LinkBuilder` feature gaps — VXLAN local/port/underlay, VLAN protocol, VRF
-status: queued for 0.19 — low (feature additions); WG split out
+from: nlink-lab feedback `nlink-feedback.md` §10 + §12 + §13-VRF (2026-05-30) + 0.19 consolidation-pass kernel research (2026-05-30)
+subject: `LinkBuilder` feature gaps — VXLAN local/port/underlay, VLAN protocol, VRF, netkit (6.7+), ovpn link half (6.16+), IPv4 GSO/GRO caps (6.6+)
+status: queued for 0.19 — medium (feature additions, expanded during consolidation); WG split out
 target version: 0.19.0
 parent: (none — single-deliverable plan)
-source: nlink-lab `nlink-feedback.md` §10, §12, §13 (VRF half only)
-created: 2026-05-30
+source: nlink-lab `nlink-feedback.md` §10, §12, §13 (VRF half); kernel-research agent (2026-05-30) added netkit, ovpn link half, GSO IPv4 caps
+created: 2026-05-30 (expanded same day during consolidation pass)
 ---
 
-# Plan 190 — `LinkBuilder` declarative-path gaps
+# Plan 190 — `LinkBuilder` declarative-path gaps + recent kernel kinds
 
 ## 1. Why this plan exists
 
-Three concrete declarative-vs-imperative asymmetries on
-`LinkBuilder` that keep nlink-lab on the imperative path for
-VXLAN, VLAN-protocol-aware setups, and VRF. All three already
-have imperative coverage in `netlink/link.rs`; the missing
-piece is wiring them into `LinkBuilder` so `NetworkConfig`
-consumers can reach them. Predictable feature work.
+Six declarative-vs-imperative asymmetries on `LinkBuilder` —
+three from the nlink-lab 158 arc, three from kernel additions
+landed between 6.6 and 6.16 that nlink doesn't yet model.
+All have prior art at the imperative `Link*` level (the older
+three) or in the kernel UAPI (the newer three); the missing
+piece is reaching them from `NetworkConfig`.
 
-WireGuard's half of feedback Item #13 is **split out to a
-separate plan** (193 or similar) because it's a different
+| # | Source | Kind/attr | Status today |
+|---|---|---|---|
+| 1 | nlink-feedback §10 | VXLAN `local` / `port` / `underlay_dev` | imperative only |
+| 2 | nlink-feedback §12 | VLAN `protocol` (802.1Q vs 802.1ad) | imperative only |
+| 3 | nlink-feedback §13-VRF | VRF link kind | imperative only |
+| 4 | kernel 6.7 + LWN 949960 | netkit (BPF-programmable veth) | integration test only |
+| 5 | kernel 6.16 | ovpn link half | not modeled |
+| 6 | kernel 6.6 | `IFLA_GSO_IPV4_MAX_SIZE` + `IFLA_GRO_IPV4_MAX_SIZE` + sibling TSO caps | not parsed |
+
+WireGuard's half of nlink-feedback Item #13 is **split out to a
+separate plan** (deferred to 0.20) because it's a different
 shape entirely: the link kind exists in RTNETLINK but
 peer/key config goes through the `Wireguard` GENL family, so
 modeling it declaratively means either a parallel
 `WireguardConfig` or accepting the "RTNETLINK link only,
-peers separate" pattern nlink-lab is already using. Out of
-scope here.
+peers separate" pattern nlink-lab is already using. Bundling
+WG + ovpn declarative coverage into a single "GENL-side
+declarative" plan in 0.20 makes more sense.
 
 ## 2. The changes — three sub-items
 
@@ -128,6 +138,113 @@ impl LinkBuilder {
 `VlanProtocol` already exists in `netlink/link.rs`. Re-export at
 the crate root if not already.
 
+### 2.3a netkit — `LinkBuilder::netkit(name)` (kernel 6.7+)
+
+netkit is BPF-programmable veth: two paired peers with mode
+(L2/L3) and per-peer policy (forward/blackhole). The
+canonical use case is Cilium's no-bridge service-mesh data
+plane. Integration coverage exists (Plan 148.7 added a netkit
+integration test); the declarative gap is now in scope per
+the kernel-research agent's recommendation.
+
+Useful UAPI:
+- `IFLA_NETKIT_PRIMARY` — primary peer's policy
+- `IFLA_NETKIT_PEER` — peer's policy
+- `IFLA_NETKIT_POLICY` — forward/blackhole on the primary
+- `IFLA_NETKIT_SCRUB` — scrub semantics (kernel 6.10+)
+- `IFLA_NETKIT_MODE` — L2 vs L3
+
+```rust
+// crates/nlink/src/netlink/config/types.rs
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum NetkitMode { L2, L3 }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum NetkitPolicy { Forward, Blackhole }
+
+#[non_exhaustive]
+pub enum DeclaredLinkType {
+    ...
+    Netkit {
+        peer: String,
+        mode: NetkitMode,
+        primary_policy: Option<NetkitPolicy>,
+        peer_policy: Option<NetkitPolicy>,
+    },
+    ...
+}
+
+impl LinkBuilder {
+    /// Build a netkit link. The `peer` argument names the
+    /// peer interface; both ends are created atomically.
+    pub fn netkit(self, peer: impl Into<String>) -> Self { ... }
+    /// L2 or L3 mode. Default L3 if unset (kernel default).
+    pub fn netkit_mode(self, mode: NetkitMode) -> Self { ... }
+    pub fn netkit_primary_policy(self, p: NetkitPolicy) -> Self { ... }
+    pub fn netkit_peer_policy(self, p: NetkitPolicy) -> Self { ... }
+}
+```
+
+Need to ship matching imperative-side `NetkitLink` struct in
+`netlink/link.rs` (~80 LOC) since it's not present today.
+
+### 2.3b ovpn link half — `LinkBuilder::ovpn(name)` (kernel 6.16+)
+
+OpenVPN data-channel offload landed as an in-kernel link kind
+in 6.16. Two-tier scope:
+
+- **In scope here**: the link half (`IFLA_INFO_KIND = "ovpn"`
+  + the mode attr). ~50 LOC. Gives consumers
+  `Link::kind() == LinkKind::Ovpn` detection + the ability
+  to create an ovpn link via `NetworkConfig`. Useful for
+  inventory tools even if they can't configure peers yet.
+- **Out of scope**: the GENL `ovpn` family for peer / cipher
+  config. Defer to a 0.20 plan that bundles WireGuard + ovpn
+  GENL-side declarative coverage.
+
+```rust
+#[non_exhaustive]
+pub enum DeclaredLinkType {
+    ...
+    Ovpn,  // link-half only; GENL-side config is separate
+    ...
+}
+
+impl LinkBuilder {
+    pub fn ovpn(self) -> Self { ... }
+}
+```
+
+### 2.3c IPv4-specific GSO/GRO caps (kernel 6.6+)
+
+`IFLA_GSO_IPV4_MAX_SIZE` and `IFLA_GRO_IPV4_MAX_SIZE` give
+per-interface caps distinct from the legacy combined
+attribute. Pair with `IFLA_TSO_MAX_SIZE` /
+`IFLA_TSO_MAX_SEGS` (6.2; may already be parsed — verify in
+implementation). Useful for throughput tuning on
+heterogeneous NICs (mixed v4/v6 workloads on the same box).
+
+```rust
+// crates/nlink/src/netlink/types/link_attrs.rs (extend
+// existing LinkAttributes struct)
+pub struct LinkAttributes {
+    ...
+    pub gso_max_size: Option<u32>,
+    pub gro_max_size: Option<u32>,
+    pub gso_ipv4_max_size: Option<u32>,   // NEW (6.6+)
+    pub gro_ipv4_max_size: Option<u32>,   // NEW (6.6+)
+    pub tso_max_size: Option<u32>,        // verify already parsed
+    pub tso_max_segs: Option<u32>,        // verify already parsed
+}
+```
+
+Parser changes: 2 match arms in `link.rs` attribute-parse
+loop. Builder side: `LinkBuilder::gso_ipv4_max(u32)` +
+`gro_ipv4_max(u32)`. Trivial.
+
 ### 2.3 VRF — `LinkBuilder::vrf(table)` (#13 half)
 
 ```rust
@@ -177,8 +294,11 @@ maintainer's audit).
 | 4 — VLAN protocol: apply-path glue | `config/apply.rs` | ~5 |
 | 5 — VRF: enum variant + builder + apply | `config/types.rs` + `config/apply.rs` | ~30 |
 | 6 — `compute_diff` parity for new VXLAN fields (idempotence) | `config/diff.rs` | ~30 |
-| 7 — Tests (see §4) | various | ~200 |
-| **Total** | | **~325 LOC** |
+| 7 — netkit: imperative `NetkitLink` + declarative + apply | `netlink/link.rs` + `config/types.rs` + `config/apply.rs` | ~150 |
+| 8 — ovpn link half: imperative + declarative + apply | `netlink/link.rs` + `config/types.rs` + `config/apply.rs` | ~60 |
+| 9 — IPv4 GSO/GRO caps: parser + builder + diff | `link.rs` parser + `config/types.rs` builder + `config/diff.rs` | ~30 |
+| 10 — Tests (see §4) | various | ~400 (was ~200) |
+| **Total** | | **~765 LOC** (was ~325) |
 
 ## 4. Tests
 
@@ -407,12 +527,12 @@ Plan 158e Slice 4's blocker (per the maintainer).
 
 | Phase | Effort |
 |---|---|
-| Code (~325 LOC across 3 files) | ~2.5 h |
-| Unit tests (5+) | ~1 h |
-| Wire-shape tests (5+) | ~1.5 h |
-| Integration tests (4+) | ~1.5 h |
+| Code (~765 LOC across 5 files) | ~5 h |
+| Unit tests (8+) | ~1.5 h |
+| Wire-shape tests (8+) | ~2 h |
+| Integration tests (7+) | ~2.5 h |
 | CHANGELOG + migration guide | ~30 min |
-| **Total** | **~7 h** |
+| **Total** | **~11.5 h** |
 
 ## 7. Risks
 
