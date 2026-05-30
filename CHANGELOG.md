@@ -4,6 +4,27 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+
+- **`Rule::dnat_v6(Ipv6Addr, Option<u16>)`** — destination NAT to an
+  IPv6 address on an `ip6` (or `inet`) NAT chain. The IPv4-only
+  `Rule::dnat` could not express the cross-node join path's ip6 DNAT.
+  Loads the 16-byte address into `R0` (and the optional port into
+  `R1`), emitting `Family::Ip6` in the NAT expr (the kernel rejects
+  `Family::Inet` there).
+
+### Changed
+
+- **`NatExpr` gained a public field `addr_reg: bool`** — decouples "an
+  address register is in use" from the v4-only `addr: Option<Ipv4Addr>`
+  field. Previously the encoder emitted `NFTA_NAT_REG_ADDR_MIN` only
+  when `addr.is_some()`, so a v6 DNAT (16-byte address in `R0`, no
+  `Ipv4Addr` to record) silently dropped the address register.
+  **Breaking** for any code constructing `NatExpr` as a struct literal:
+  add `addr_reg: <bool>` (set `true` iff an `R0` address load precedes
+  the expr). The `NatExpr::{snat,dnat}` + `.addr()` builders are
+  unaffected.
+
 ## [0.18.0] - 2026-05-29
 
 ### Added

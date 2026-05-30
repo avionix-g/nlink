@@ -669,3 +669,66 @@ async fn nftables_snapshot_walks_ruleset() -> nlink::Result<()> {
     })
     .await
 }
+
+// ============================================================================
+// Rule::dnat_v6 — kernel acceptance of an ip6 DNAT rule
+// ============================================================================
+
+/// An `ip6` DNAT rule built with `Rule::dnat_v6` is accepted by the
+/// kernel and round-trips through `list_rules`.
+///
+/// The unit tests in `nftables::types` only assert the in-memory expr
+/// layout (R0 holds the address, `addr_reg` is set). They cannot prove
+/// the load-bearing claims `dnat_v6` makes about the wire format: that
+/// the kernel accepts `Family::Ip6` in the NAT expr with the 16-byte
+/// `R0` load. This test installs a real rule on an `ip6` NAT prerouting
+/// chain — a kernel that disagreed with the register layout would reject
+/// the batch with `EINVAL`.
+#[tokio::test]
+async fn dnat_v6_rule_round_trips() -> nlink::Result<()> {
+    require_root!();
+    nlink::require_modules!("nf_tables", "nft_nat");
+
+    with_timeout(async {
+        use nlink::netlink::nftables::types::{Chain, Rule};
+        use std::net::Ipv6Addr;
+
+        let ns = TestNamespace::new("dnat-v6")?;
+        let nft = nft_in_ns(&ns)?;
+
+        nft.add_table("nat6", Family::Ip6).await?;
+        nft.add_chain(
+            Chain::new("nat6", "prerouting")
+                .family(Family::Ip6)
+                .hook(Hook::Prerouting)
+                .priority(Priority::DstNat)
+                .chain_type(ChainType::Nat),
+        )
+        .await?;
+
+        let target: Ipv6Addr = "fd30::2".parse().unwrap();
+        nft.add_rule(
+            Rule::new("nat6", "prerouting")
+                .family(Family::Ip6)
+                .match_tcp_dport(80)
+                .dnat_v6(target, Some(8080)),
+        )
+        .await?;
+
+        // The kernel accepted the rule (add_rule above would have
+        // errored otherwise). Confirm it round-trips in the dump with a
+        // non-empty expression body.
+        let rules = nft.list_rules("nat6", Family::Ip6).await?;
+        let rule = rules
+            .iter()
+            .find(|r| r.chain == "prerouting")
+            .expect("dnat_v6 rule must appear in list_rules");
+        assert!(
+            !rule.expression_bytes.is_empty(),
+            "dumped rule must carry expression bytes"
+        );
+
+        Ok(())
+    })
+    .await
+}
