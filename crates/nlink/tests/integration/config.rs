@@ -304,10 +304,9 @@ async fn test_config_dry_run() -> Result<()> {
     let result = config
         .apply_with_options(
             &conn,
-            ApplyOptions {
-                dry_run: true,
-                ..Default::default()
-            },
+            // Plan 188 §2.2 — ApplyOptions is `#[non_exhaustive]`;
+            // builder methods replace struct-literal construction.
+            ApplyOptions::default().with_dry_run(true),
         )
         .await?;
 

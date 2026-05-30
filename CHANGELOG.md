@@ -6,6 +6,19 @@ All notable changes to this project will be documented in this file.
 
 ### Breaking changes
 
+- **`ApplyOptions` is now `#[non_exhaustive]` + builder-shaped
+  (Plan 188 §2.2)** — struct-literal construction no longer
+  compiles. Build via `with_*` setters instead:
+  ```rust
+  // Before
+  ApplyOptions { dry_run: true, ..Default::default() }
+  // 0.19+
+  ApplyOptions::default().with_dry_run(true)
+  ```
+  Mirrors `ReconcileOptions` (Plan 163). The lockdown enables
+  growing the option set in future minors without semver
+  breakage.
+
 - **`Error::from_errno*` factories now normalize via `.abs()`
   (Plan 187 §2.1)** — passing positive or negative errno
   produces the same stored POSIX value. Before 0.19 the

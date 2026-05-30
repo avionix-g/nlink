@@ -114,10 +114,9 @@ async fn main() -> nlink::Result<()> {
     let report = teardown
         .apply_with_options(
             &conn,
-            ApplyOptions {
-                purge: true,
-                ..Default::default()
-            },
+            // Plan 188 §2.2 — `#[non_exhaustive]` now;
+            // construct via the `with_*` builder methods.
+            ApplyOptions::default().with_purge(true),
         )
         .await?;
     println!(

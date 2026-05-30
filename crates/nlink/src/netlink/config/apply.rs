@@ -26,7 +26,41 @@ use crate::netlink::{
 };
 
 /// Options for applying configuration.
+///
+/// Construct via `Default::default()` + the `with_*` builder
+/// methods, NOT via struct-literal syntax:
+///
+/// ```ignore
+/// use nlink::netlink::config::ApplyOptions;
+/// let opts = ApplyOptions::default()
+///     .with_dry_run(true)
+///     .with_continue_on_error(false)
+///     .with_purge(false);
+/// ```
+///
+/// # Default semantics
+///
+/// `ApplyOptions::default()` produces conservative defaults:
+///
+/// - `dry_run: false` — operations actually run against the
+///   kernel.
+/// - `continue_on_error: false` — the first error propagates
+///   as `Err`, halting further ops. Partially-applied state
+///   is left in the kernel.
+/// - `purge: false` — removals (links / addresses / routes
+///   present in the kernel but absent from the config) are
+///   skipped, not propagated as deletions.
+///
+/// This is the right default; opt in to each surface
+/// individually via the builders.
+///
+/// Plan 188 §2.2 made this `#[non_exhaustive]` so we can grow
+/// the option set in future minors without semver breakage —
+/// the trade-off is that struct-literal construction is no
+/// longer allowed by downstream code. Mirrors `ReconcileOptions`
+/// (Plan 163).
 #[derive(Debug, Clone, Default)]
+#[non_exhaustive]
 pub struct ApplyOptions {
     /// Don't actually make changes, just compute what would be done.
     pub dry_run: bool,
@@ -40,6 +74,35 @@ pub struct ApplyOptions {
     /// **Warning**: Use with caution! This can remove important
     /// system interfaces if they're not in your config.
     pub purge: bool,
+}
+
+impl ApplyOptions {
+    /// Toggle dry-run mode. With dry-run on, no kernel
+    /// mutations occur — every operation just records what
+    /// it WOULD do in `ApplyResult::summary`.
+    pub fn with_dry_run(mut self, on: bool) -> Self {
+        self.dry_run = on;
+        self
+    }
+
+    /// Toggle continue-on-error. With this on, the first
+    /// per-op failure records into `ApplyResult::errors`
+    /// instead of halting `apply`. The remaining operations
+    /// still run. Useful for "best-effort" reconciliation
+    /// where partial progress is preferable to no progress.
+    pub fn with_continue_on_error(mut self, on: bool) -> Self {
+        self.continue_on_error = on;
+        self
+    }
+
+    /// Toggle purge mode. With purge on, kernel resources
+    /// (links/addresses/routes) absent from the config are
+    /// scheduled for removal. Use with caution — sweeps away
+    /// undeclared interfaces.
+    pub fn with_purge(mut self, on: bool) -> Self {
+        self.purge = on;
+        self
+    }
 }
 
 /// Result of applying configuration.
