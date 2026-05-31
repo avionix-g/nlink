@@ -1572,6 +1572,12 @@ impl Connection<Xfrm> {
         fields(method = "get_security_associations")
     )]
     pub async fn get_security_associations(&self) -> Result<Vec<SecurityAssociation>> {
+        // F1 fix — serialize the send + recv-loop pair so concurrent
+        // tasks on a shared `Arc<Connection>` don't race on the recv
+        // side. See connection.rs `Concurrency` docstring. Acquired
+        // BEFORE the with_timeout wrapper so the lock spans the
+        // entire timeout window.
+        let _guard = self.lock_request().await;
         // Plan 208 Phase 1+2 — wrap in with_timeout, add seq filter,
         // detect NLM_F_DUMP_INTR.
         self.with_timeout(async move {
@@ -1678,6 +1684,12 @@ impl Connection<Xfrm> {
     /// ```
     #[tracing::instrument(level = "debug", skip_all, fields(method = "get_security_policies"))]
     pub async fn get_security_policies(&self) -> Result<Vec<SecurityPolicy>> {
+        // F1 fix — serialize the send + recv-loop pair so concurrent
+        // tasks on a shared `Arc<Connection>` don't race on the recv
+        // side. See connection.rs `Concurrency` docstring. Acquired
+        // BEFORE the with_timeout wrapper so the lock spans the
+        // entire timeout window.
+        let _guard = self.lock_request().await;
         // Plan 208 Phase 1+2 — wrap in with_timeout, seq filter,
         // NLM_F_DUMP_INTR detection.
         self.with_timeout(async move {

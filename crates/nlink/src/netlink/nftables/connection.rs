@@ -721,6 +721,10 @@ impl Connection<Nftables> {
             return Ok(());
         }
 
+        // F1 fix — serialize the send + recv-loop pair so concurrent
+        // tasks on a shared `Arc<Connection>` don't race on the recv
+        // side. See connection.rs `Concurrency` docstring.
+        let _guard = self.lock_request().await;
         let mut batch = Vec::new();
 
         // NFNL_MSG_BATCH_BEGIN — control message; no ACK requested.
@@ -895,6 +899,10 @@ impl Connection<Nftables> {
     ///
     /// Returns (nfgen_family, payload_after_nfgenmsg) tuples.
     async fn nft_dump(&self, mut builder: MessageBuilder) -> Result<Vec<(u8, Vec<u8>)>> {
+        // F1 fix — serialize the send + recv-loop pair so concurrent
+        // tasks on a shared `Arc<Connection>` don't race on the recv
+        // side. See connection.rs `Concurrency` docstring.
+        let _guard = self.lock_request().await;
         let seq = self.socket().next_seq();
         builder.set_seq(seq);
         builder.set_pid(self.socket().pid());

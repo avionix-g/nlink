@@ -153,6 +153,10 @@ impl Connection<Nl80211> {
     /// Trigger a scan by interface index (namespace-safe).
     #[tracing::instrument(level = "debug", skip_all, fields(method = "trigger_scan_by_index"))]
     pub async fn trigger_scan_by_index(&self, ifindex: u32, request: &ScanRequest) -> Result<()> {
+        // F1 fix — serialize the send + recv-loop pair so concurrent
+        // tasks on a shared `Arc<Connection>` don't race on the recv
+        // side. See connection.rs `Concurrency` docstring.
+        let _guard = self.lock_request().await;
         let family_id = self.state().family_id;
 
         let mut builder = MessageBuilder::new(family_id, NLM_F_REQUEST | NLM_F_ACK);
@@ -204,6 +208,10 @@ impl Connection<Nl80211> {
         fields(method = "get_scan_results_by_index")
     )]
     pub async fn get_scan_results_by_index(&self, ifindex: u32) -> Result<Vec<ScanResult>> {
+        // F1 fix — serialize the send + recv-loop pair so concurrent
+        // tasks on a shared `Arc<Connection>` don't race on the recv
+        // side. See connection.rs `Concurrency` docstring.
+        let _guard = self.lock_request().await;
         let family_id = self.state().family_id;
 
         let mut builder = MessageBuilder::new(family_id, NLM_F_REQUEST | NLM_F_DUMP);
@@ -264,6 +272,10 @@ impl Connection<Nl80211> {
     /// List all stations by interface index.
     #[tracing::instrument(level = "debug", skip_all, fields(method = "get_stations_by_index"))]
     pub async fn get_stations_by_index(&self, ifindex: u32) -> Result<Vec<StationInfo>> {
+        // F1 fix — serialize the send + recv-loop pair so concurrent
+        // tasks on a shared `Arc<Connection>` don't race on the recv
+        // side. See connection.rs `Concurrency` docstring.
+        let _guard = self.lock_request().await;
         let family_id = self.state().family_id;
 
         let mut builder = MessageBuilder::new(family_id, NLM_F_REQUEST | NLM_F_DUMP);
@@ -325,6 +337,10 @@ impl Connection<Nl80211> {
     /// Get the current regulatory domain.
     #[tracing::instrument(level = "debug", skip_all, fields(method = "get_regulatory"))]
     pub async fn get_regulatory(&self) -> Result<RegulatoryDomain> {
+        // F1 fix — serialize the send + recv-loop pair so concurrent
+        // tasks on a shared `Arc<Connection>` don't race on the recv
+        // side. See connection.rs `Concurrency` docstring.
+        let _guard = self.lock_request().await;
         let family_id = self.state().family_id;
 
         let mut builder = MessageBuilder::new(family_id, NLM_F_REQUEST);
@@ -373,6 +389,10 @@ impl Connection<Nl80211> {
     /// Connect by interface index (namespace-safe).
     #[tracing::instrument(level = "debug", skip_all, fields(method = "connect_by_index"))]
     pub async fn connect_by_index(&self, ifindex: u32, request: ConnectRequest) -> Result<()> {
+        // F1 fix — serialize the send + recv-loop pair so concurrent
+        // tasks on a shared `Arc<Connection>` don't race on the recv
+        // side. See connection.rs `Concurrency` docstring.
+        let _guard = self.lock_request().await;
         let family_id = self.state().family_id;
 
         let mut builder = MessageBuilder::new(family_id, NLM_F_REQUEST | NLM_F_ACK);
@@ -409,6 +429,10 @@ impl Connection<Nl80211> {
     /// Disconnect by interface index (namespace-safe).
     #[tracing::instrument(level = "debug", skip_all, fields(method = "disconnect_by_index"))]
     pub async fn disconnect_by_index(&self, ifindex: u32) -> Result<()> {
+        // F1 fix — serialize the send + recv-loop pair so concurrent
+        // tasks on a shared `Arc<Connection>` don't race on the recv
+        // side. See connection.rs `Concurrency` docstring.
+        let _guard = self.lock_request().await;
         let family_id = self.state().family_id;
 
         let mut builder = MessageBuilder::new(family_id, NLM_F_REQUEST | NLM_F_ACK);
@@ -431,6 +455,12 @@ impl Connection<Nl80211> {
     #[tracing::instrument(level = "debug", skip_all, fields(method = "set_power_save"))]
     pub async fn set_power_save(&self, iface: &str, enabled: bool) -> Result<()> {
         let ifindex = self.resolve_ifindex(iface).await?;
+        // F1 fix — serialize the send + recv-loop pair so concurrent
+        // tasks on a shared `Arc<Connection>` don't race on the recv
+        // side. See connection.rs `Concurrency` docstring. Note: the
+        // `resolve_ifindex` above runs its own send+recv flow under
+        // the lock; we re-acquire here for the actual SET request.
+        let _guard = self.lock_request().await;
         let family_id = self.state().family_id;
 
         let mut builder = MessageBuilder::new(family_id, NLM_F_REQUEST | NLM_F_ACK);
@@ -460,6 +490,12 @@ impl Connection<Nl80211> {
     #[tracing::instrument(level = "debug", skip_all, fields(method = "get_power_save"))]
     pub async fn get_power_save(&self, iface: &str) -> Result<PowerSaveState> {
         let ifindex = self.resolve_ifindex(iface).await?;
+        // F1 fix — serialize the send + recv-loop pair so concurrent
+        // tasks on a shared `Arc<Connection>` don't race on the recv
+        // side. See connection.rs `Concurrency` docstring. Note: the
+        // `resolve_ifindex` above runs its own send+recv flow under
+        // the lock; we re-acquire here for the actual GET request.
+        let _guard = self.lock_request().await;
         let family_id = self.state().family_id;
 
         let mut builder = MessageBuilder::new(family_id, NLM_F_REQUEST);
@@ -519,6 +555,10 @@ impl Connection<Nl80211> {
     /// ```
     #[tracing::instrument(level = "debug", skip_all, fields(method = "set_wiphy_netns"))]
     pub async fn set_wiphy_netns(&self, wiphy: u32, netns_fd: i32) -> Result<()> {
+        // F1 fix — serialize the send + recv-loop pair so concurrent
+        // tasks on a shared `Arc<Connection>` don't race on the recv
+        // side. See connection.rs `Concurrency` docstring.
+        let _guard = self.lock_request().await;
         let family_id = self.state().family_id;
 
         let mut builder = MessageBuilder::new(family_id, NLM_F_REQUEST | NLM_F_ACK);
@@ -545,6 +585,10 @@ impl Connection<Nl80211> {
     /// a namespace file descriptor.
     #[tracing::instrument(level = "debug", skip_all, fields(method = "set_wiphy_netns_pid"))]
     pub async fn set_wiphy_netns_pid(&self, wiphy: u32, pid: u32) -> Result<()> {
+        // F1 fix — serialize the send + recv-loop pair so concurrent
+        // tasks on a shared `Arc<Connection>` don't race on the recv
+        // side. See connection.rs `Concurrency` docstring.
+        let _guard = self.lock_request().await;
         let family_id = self.state().family_id;
 
         let mut builder = MessageBuilder::new(family_id, NLM_F_REQUEST | NLM_F_ACK);
@@ -571,6 +615,10 @@ impl Connection<Nl80211> {
 
     /// Send a GENL dump request (no filter).
     async fn nl80211_dump(&self, cmd: u8) -> Result<Vec<Vec<u8>>> {
+        // F1 fix — serialize the send + recv-loop pair so concurrent
+        // tasks on a shared `Arc<Connection>` don't race on the recv
+        // side. See connection.rs `Concurrency` docstring.
+        let _guard = self.lock_request().await;
         let family_id = self.state().family_id;
 
         let mut builder = MessageBuilder::new(family_id, NLM_F_REQUEST | NLM_F_DUMP);

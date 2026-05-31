@@ -309,6 +309,12 @@ impl<'a> Batch<'a> {
     }
 
     async fn send_chunk(&self, ops: &[BatchOp]) -> Result<Vec<std::result::Result<(), Error>>> {
+        // F1 fix — serialize the send + recv-loop pair so concurrent
+        // tasks on a shared `Arc<Connection>` don't race on the recv
+        // side. See connection.rs `Concurrency` docstring. Acquired
+        // BEFORE the with_timeout wrapper so the lock spans the
+        // entire timeout window.
+        let _guard = self.conn.lock_request().await;
         // Concatenate messages into a single buffer
         let total_size: usize = ops.iter().map(|o| o.msg.len()).sum();
         let mut buf = Vec::with_capacity(total_size);

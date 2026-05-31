@@ -888,6 +888,12 @@ impl Connection<Netfilter> {
 
     /// Get connection tracking entries for a specific address family.
     async fn get_conntrack_family(&self, family: u8) -> Result<Vec<ConntrackEntry>> {
+        // F1 fix — serialize the send + recv-loop pair so concurrent
+        // tasks on a shared `Arc<Connection>` don't race on the recv
+        // side. See connection.rs `Concurrency` docstring. Acquired
+        // BEFORE the with_timeout wrapper so the lock spans the
+        // entire timeout window.
+        let _guard = self.lock_request().await;
         // Plan 208 Phase 1+2 — wrap in with_timeout, seq filter,
         // NLM_F_DUMP_INTR detection.
         self.with_timeout(async move {

@@ -1153,6 +1153,10 @@ impl Connection<Ethtool> {
 
     /// Send an ethtool GET request (dump style).
     async fn ethtool_get(&self, cmd: EthtoolCmd, ifname: &str) -> Result<Vec<u8>> {
+        // F1 fix — serialize the send + recv-loop pair so concurrent
+        // tasks on a shared `Arc<Connection>` don't race on the recv
+        // side. See connection.rs `Concurrency` docstring.
+        let _guard = self.lock_request().await;
         let family_id = self.state().family_id;
 
         let mut builder = MessageBuilder::new(family_id, NLM_F_REQUEST | NLM_F_DUMP);
@@ -1227,6 +1231,10 @@ impl Connection<Ethtool> {
         ifname: &str,
         build_attrs: impl FnOnce(&mut MessageBuilder),
     ) -> Result<()> {
+        // F1 fix — serialize the send + recv-loop pair so concurrent
+        // tasks on a shared `Arc<Connection>` don't race on the recv
+        // side. See connection.rs `Concurrency` docstring.
+        let _guard = self.lock_request().await;
         let family_id = self.state().family_id;
 
         let mut builder = MessageBuilder::new(family_id, NLM_F_REQUEST | NLM_F_ACK);

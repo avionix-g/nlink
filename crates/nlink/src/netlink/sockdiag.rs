@@ -242,6 +242,10 @@ impl Connection<SockDiag> {
     /// }
     /// ```
     pub async fn destroy_tcp_socket(&self, socket: &InetSocket) -> Result<()> {
+        // F1 fix — serialize the send + recv-loop pair so concurrent
+        // tasks on a shared `Arc<Connection>` don't race on the recv
+        // side. See connection.rs `Concurrency` docstring.
+        let _guard = self.lock_request().await;
         let seq = self.socket().next_seq();
         let pid = self.socket().pid();
 
@@ -415,6 +419,12 @@ impl Connection<SockDiag> {
         filter: &InetFilter,
         family: AddressFamily,
     ) -> Result<Vec<InetSocket>> {
+        // F1 fix — serialize the send + recv-loop pair so concurrent
+        // tasks on a shared `Arc<Connection>` don't race on the recv
+        // side. See connection.rs `Concurrency` docstring. Acquired
+        // BEFORE the with_timeout wrapper so the lock spans the
+        // entire timeout window.
+        let _guard = self.lock_request().await;
         // Plan 208 Phase 1+2 — wrap in with_timeout, seq filter,
         // NLM_F_DUMP_INTR detection.
         self.with_timeout(async move {
@@ -519,6 +529,12 @@ impl Connection<SockDiag> {
     }
 
     async fn query_unix_typed(&self, filter: &UnixFilter) -> Result<Vec<UnixSocket>> {
+        // F1 fix — serialize the send + recv-loop pair so concurrent
+        // tasks on a shared `Arc<Connection>` don't race on the recv
+        // side. See connection.rs `Concurrency` docstring. Acquired
+        // BEFORE the with_timeout wrapper so the lock spans the
+        // entire timeout window.
+        let _guard = self.lock_request().await;
         // Plan 208 Phase 1+2 — wrap in with_timeout, seq filter,
         // NLM_F_DUMP_INTR detection.
         self.with_timeout(async move {
@@ -617,6 +633,12 @@ impl Connection<SockDiag> {
         &self,
         filter: &NetlinkFilter,
     ) -> Result<Vec<crate::sockdiag::socket::NetlinkSocket>> {
+        // F1 fix — serialize the send + recv-loop pair so concurrent
+        // tasks on a shared `Arc<Connection>` don't race on the recv
+        // side. See connection.rs `Concurrency` docstring. Acquired
+        // BEFORE the with_timeout wrapper so the lock spans the
+        // entire timeout window.
+        let _guard = self.lock_request().await;
         // Plan 208 Phase 1+2 — wrap in with_timeout, seq filter,
         // NLM_F_DUMP_INTR detection.
         self.with_timeout(async move {
