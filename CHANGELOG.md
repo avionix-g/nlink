@@ -6,6 +6,23 @@ All notable changes to this project will be documented in this file.
 
 ### Breaking changes
 
+- **`NatExpr.addr` re-typed from `Option<Ipv4Addr>` to the
+  `NatAddr` enum (PR #6, @avionix-g)** — `NatAddr` has three
+  variants: `None` (port-only NAT), `V4(Ipv4Addr)` (IPv4
+  address recorded), and `Reg` (a non-v4 address — e.g. v6 —
+  loaded into `R0` with no `Ipv4Addr` to record). Before this
+  change, the encoder emitted `NFTA_NAT_REG_ADDR_MIN` only
+  when `addr.is_some()`, so a v6 NAT (16-byte address in
+  `R0`, no `Ipv4Addr` to carry) silently dropped the address
+  register. The enum models "register in use" and "the IPv4
+  value to record" as one value so the illegal
+  `(addr recorded, register unused)` state is
+  unrepresentable. Breaking for code constructing `NatExpr`
+  as a struct literal or matching on `addr`. The
+  `NatExpr::{snat,dnat}` + `.addr()` and
+  `Rule::{snat,dnat,snat_v6,dnat_v6}` builders are
+  unaffected. v4 wire output is byte-identical.
+
 - **`ApplyOptions` is now `#[non_exhaustive]` + builder-shaped
   (Plan 188 §2.2)** — struct-literal construction no longer
   compiles. Build via `with_*` setters instead:
@@ -30,6 +47,52 @@ All notable changes to this project will be documented in this file.
   break — update to `Some(N)`.
 
 ### Fixed
+
+- **TC filter `tcm_info` packing — kernel-EINVAL on every
+  `add_filter*` call with explicit protocol+priority (PR #7,
+  @nuclearcat)** — `add_filter_by_index_full` (and the
+  sibling `replace`/`change`/`delete` paths in `filter.rs`,
+  plus the ratelimit ingress filter) packed `tcm_info` as
+  `(protocol << 16) | priority` with no `htons`. The kernel
+  uses `TC_H_MAKE(prio << 16, htons(proto))` — priority in
+  the upper 16 bits, ethernet protocol in the lower 16 bits
+  in network byte order. With the halves transposed the
+  kernel read e.g. protocol=0x0800/prio=200 as
+  protocol=200/prio=2048 and returned EINVAL; every TC
+  filter add with an explicit ethernet protocol failed. The
+  ratelimit ingress filter was silently installed under the
+  wrong ethertype. Fix routes every pack site through a
+  single `TcMsg::with_filter_info(protocol, priority)`
+  chokepoint, restores accessor symmetry on
+  `TcMessage::protocol()` / `priority()` (which were
+  self-inconsistently broken — matched the buggy pack while
+  the unused `filter_protocol()` / `filter_priority()`
+  matched the kernel). 4 new unit tests pin iproute2's
+  exact wire layout + add the
+  `pre_fix_layout_was_transposed` regression guard
+  documenting what the kernel parsed pre-fix. 1 new
+  root-gated integration test
+  (`test_filter_add_explicit_protocol_priority`) asserts a
+  real filter add accepts. **Runtime semantic break** for
+  `TcMessage::protocol()` / `priority()` accessor return
+  values — they now return the kernel-correct values
+  instead of the transposed garbage; signature unchanged so
+  `cargo-semver-checks` doesn't flag it, but document the
+  shift. Verified on kernel 6.17.
+
+- **IPv6 NAT silently dropped the address register
+  (PR #6, @avionix-g)** — see the `### Breaking changes`
+  entry on `NatExpr.addr` → `NatAddr` for the type-level
+  fix. New `Rule::dnat_v6(Ipv6Addr, Option<u16>)` and
+  `Rule::snat_v6(Ipv6Addr, Option<u16>)` builders emit
+  `Family::Ip6` in the NAT expr (matching the address
+  family, not the chain's `Family::Inet`), load the 16-byte
+  address into `R0` + optional port into `R1`. 3 new unit
+  tests + 2 root-gated diff-idempotency integration tests
+  (`dnat_v6_rule_round_trips`, `snat_v6_rule_round_trips`)
+  on separate hooks (postrouting/`SrcNat` vs
+  prerouting/`DstNat`) prove the kernel stored exactly the
+  expr bytes nlink rendered.
 
 - **`Error::is_busy`, `is_already_exists`, `is_permission_denied`
   catch `Error::Io` variants (Plan 187 §2.5)** — these three
@@ -77,6 +140,15 @@ All notable changes to this project will be documented in this file.
   or use the `{}` placeholder in `format!`/`println!`.
 
 ### Added
+
+- **`Rule::dnat_v6(Ipv6Addr, Option<u16>)` + `Rule::snat_v6(Ipv6Addr,
+  Option<u16>)` (PR #6, @avionix-g)** — IPv6 NAT helpers, the
+  counterparts to `dnat` / `snat`. Each loads the 16-byte address
+  into `R0` (and the optional port into `R1`) and emits `Family::Ip6`
+  in the NAT expr to match the address family (not the chain's
+  `Family::Inet`). Use on `ip6` or `inet` NAT chains. Closes a silent
+  encoder bug where `addr.is_some()` was used as the proxy for
+  "register in use" — see the breaking-change entry on `NatExpr.addr`.
 
 - **Post-cycle audit backfill** — closes gaps surfaced by
   the 0.19 plan-by-plan audit:
