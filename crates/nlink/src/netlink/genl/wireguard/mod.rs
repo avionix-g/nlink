@@ -60,9 +60,13 @@
 
 mod connection;
 mod types;
+pub mod watch;
 
 pub use types::{
     AllowedIp, WG_KEY_LEN, WgDevice, WgDeviceBuilder, WgPeer, WgPeerBuilder, WgPeerFlags,
+};
+pub use watch::{
+    WireguardEvent, WireguardWatchOptions, WireguardWatcher, diff_device_states,
 };
 
 /// WireGuard Generic Netlink family name.

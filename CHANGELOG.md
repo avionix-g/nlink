@@ -78,6 +78,40 @@ All notable changes to this project will be documented in this file.
 
 ### Added
 
+- **WireGuard polling watcher (Plan 199, redesigned)** —
+  the kernel `wireguard` GENL family declares
+  `n_mcgrps = 0`; verified 2026-05-31 via
+  `drivers/net/wireguard/netlink.c` upstream. There is no
+  native event-subscription surface — every WG monitoring
+  tool polls `GET_DEVICE` on a cadence. nlink now ships a
+  typed poll-and-diff primitive so consumers don't
+  re-implement that machinery per app.
+  - `WireguardEvent` enum: `PeerAdded`, `PeerRemoved`,
+    `PeerEndpointChanged`, `PeerHandshakeRefreshed`,
+    `PeerAllowedIpsChanged`. First poll emits `PeerAdded`
+    for every existing peer (initial-inventory semantics,
+    matching Plan 185 / 191 snapshot shape).
+  - `WireguardWatchOptions` builder: `.interval(d)` +
+    `.interface(name)`. Default cadence 1 s. The watcher
+    does NOT auto-enumerate WG-kind interfaces — caller
+    specifies the set explicitly.
+  - `WireguardWatcher::new(conn, opts)` returns `Result`
+    (validates non-empty interfaces);
+    `next_events().await -> Result<Vec<WireguardEvent>>`
+    sleeps then polls + diffs. `connection()` /
+    `into_connection()` give callers their socket back.
+  - `diff_device_states(ifname, prev, curr)` pure
+    function exposed for callers wiring custom polling
+    cadences.
+  - If the kernel grows multicast support (Linus Lotz's
+    2021 patch is "Awaiting Upstream" — never merged),
+    this watcher will be replaced with a multicast
+    subscriber and the polling path will become a
+    compatibility shim. The `WireguardEvent` enum shape
+    stays the same either way.
+  11 new unit tests on the pure-function diff. Closes
+  what Plan 191 §8 punted to a separate plan.
+
 - **`SetKeyType::InetProto` + `Concat(Vec<_>)` (Plan 198
   §2.1, scoped subset)** — extends the nftables set key
   taxonomy with the two real-world variants the
