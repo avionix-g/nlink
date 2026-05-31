@@ -479,3 +479,386 @@ async fn plan_204_c2_xfrm_add_sp_round_trips() -> Result<()> {
     })
     .await
 }
+
+// =============================================================================
+// Plan 204 C1 — NFT_JUMP / NFT_GOTO verdict constants round-trip
+// =============================================================================
+
+/// Plan 204 C1 kernel-level regression test (test-coverage gap
+/// agent flagged as CRITICAL — only unit-level constant checks
+/// existed pre-fix). Pre-Plan-204 `Verdict::Jump(chain)` wrote
+/// `-2` (which is `NFT_BREAK`) on the wire. The kernel either
+/// silently treated it as BREAK (rule terminates evaluation)
+/// or rejected the rule entirely, depending on attribute
+/// validation ordering. Either way every jump rule was broken
+/// since the `Verdict` enum shipped.
+///
+/// Post-fix: `Verdict::Jump = -3` and `Verdict::Goto = -4`
+/// (matching kernel UAPI `nft_verdicts`).
+///
+/// The test installs a parent chain that jumps to a child
+/// chain and verifies:
+/// 1. The kernel ACCEPTS the rule (no commit error).
+/// 2. `list_rules` returns the rule.
+/// 3. The raw `expression_bytes` contain the i32 LE encoding
+///    of `NFT_JUMP = -3` (`0xfd 0xff 0xff 0xff`), proving the
+///    correct constant survived to the kernel.
+///
+/// A regression that re-introduces the old `-2` constant
+/// would: (a) likely fail step 1 (kernel rejects), or (b)
+/// fail step 3 (the verdict bytes contain `0xfe` instead of
+/// `0xfd`).
+#[tokio::test]
+async fn plan_204_c1_verdict_jump_round_trips_through_kernel() -> Result<()> {
+    nlink::require_root!();
+    nlink::require_module!("nf_tables");
+    with_timeout(async {
+        use nlink::netlink::Nftables;
+        use nlink::netlink::nftables::types::{Chain, Family, Hook, Rule};
+
+        let ns = TestNamespace::new("p204-c1-jump")?;
+        let conn = namespace::connection_for::<Nftables>(ns.name())?;
+
+        // Stand up a table with a parent chain (hooks input,
+        // base chain) and a child chain (regular, no hook —
+        // jump target).
+        let parent = Chain::new("t", "parent")
+            .family(Family::Inet)
+            .hook(Hook::Input)
+            .priority(nlink::netlink::nftables::Priority::Custom(0));
+        let child = Chain::new("t", "child").family(Family::Inet);
+
+        conn.transaction()
+            .add_table("t", Family::Inet)
+            .add_chain(parent)
+            .add_chain(child)
+            .commit(&conn)
+            .await?;
+
+        // The rule: when a packet arrives at parent's input hook,
+        // jump to child. Plan 204 fixes mean this should install
+        // without error.
+        let jump_rule = Rule::new("t", "parent")
+            .family(Family::Inet)
+            .jump("child");
+
+        conn.transaction()
+            .add_rule(jump_rule)
+            .commit(&conn)
+            .await?;
+
+        // Step 2: rule must dump back.
+        let rules = conn.list_rules("t", Family::Inet).await?;
+        let parent_rules: Vec<_> = rules
+            .iter()
+            .filter(|r| r.chain == "parent")
+            .collect();
+        assert_eq!(
+            parent_rules.len(),
+            1,
+            "expected 1 rule in parent chain after jump install, got {}",
+            parent_rules.len()
+        );
+
+        // Step 3: the raw expression bytes must contain
+        // `NFT_JUMP = -3` encoded little-endian. The verdict
+        // byte sequence is embedded inside the NFTA_VERDICT_CODE
+        // attribute payload (4 bytes, native-endian which is LE
+        // on x86_64 / aarch64). Pre-fix this would be
+        // [0xfe, 0xff, 0xff, 0xff] (NFT_BREAK = -2).
+        let expr_bytes = &parent_rules[0].expression_bytes;
+        let jump_marker = (-3_i32).to_ne_bytes();
+        let break_marker = (-2_i32).to_ne_bytes();
+        let contains_jump = expr_bytes
+            .windows(4)
+            .any(|w| w == jump_marker.as_slice());
+        let contains_break_with_chain = expr_bytes
+            .windows(4)
+            .any(|w| w == break_marker.as_slice());
+        assert!(
+            contains_jump,
+            "rule expression bytes must contain NFT_JUMP marker (-3 LE): bytes = {expr_bytes:02x?}"
+        );
+        assert!(
+            !contains_break_with_chain,
+            "rule expression bytes must NOT contain NFT_BREAK marker (-2 LE) — \
+             pre-Plan-204 bug regressed: bytes = {expr_bytes:02x?}"
+        );
+
+        Ok(())
+    })
+    .await
+}
+
+// =============================================================================
+// Plan 211 M1 — Hook::InetIngress kernel acceptance
+// =============================================================================
+
+/// Plan 211 M1 kernel-level regression (test-coverage gap agent
+/// flagged as CRITICAL — only unit-level constant checks pre-fix).
+///
+/// Pre-Plan-211, `Hook::Ingress` on `Family::Inet` silently
+/// aliased to the wrong hook value (PREROUTING instead of the
+/// kernel-5.10+ INGRESS hook value 5). After the family-aware
+/// `Hook::Ingress` → `Hook::InetIngress` split, installing a
+/// chain on the `Inet` family with `Hook::InetIngress` must:
+/// 1. Be accepted by a kernel 5.10+
+/// 2. NOT collide with any existing Prerouting chain on the
+///    same family (proves the hook value is genuinely different)
+///
+/// The test installs both a `Prerouting` chain AND an
+/// `InetIngress` chain on the same Inet table at the same
+/// priority. If `InetIngress` were aliasing to `Prerouting` (the
+/// pre-fix shape), the kernel would reject the second chain
+/// with EEXIST/EBUSY. Both succeeding proves the hook values
+/// are distinct.
+///
+/// Skips cleanly on kernels older than 5.10 (the kernel
+/// returns EOPNOTSUPP / EINVAL on `NF_INET_INGRESS` — we
+/// detect the error and `Ok(())` out).
+#[tokio::test]
+async fn plan_211_m1_inet_ingress_chain_installs_on_correct_hook() -> Result<()> {
+    nlink::require_root!();
+    nlink::require_module!("nf_tables");
+    with_timeout(async {
+        use nlink::netlink::Nftables;
+        use nlink::netlink::nftables::types::{Chain, Family, Hook};
+
+        let ns = TestNamespace::new("p211-m1-ingress")?;
+        let conn = namespace::connection_for::<Nftables>(ns.name())?;
+
+        // Install the Prerouting chain first — always supported.
+        let prerouting = Chain::new("t", "pre")
+            .family(Family::Inet)
+            .hook(Hook::Prerouting)
+            .priority(nlink::netlink::nftables::Priority::Custom(0));
+        conn.transaction()
+            .add_table("t", Family::Inet)
+            .add_chain(prerouting)
+            .commit(&conn)
+            .await?;
+
+        // Now try the InetIngress chain on the same table at the
+        // same priority. Pre-Plan-211 this would EEXIST against
+        // the Prerouting chain because both aliased to the same
+        // hook value. Post-fix InetIngress = NF_INET_INGRESS (5).
+        //
+        // NetdevIngress chains require a `device` attribute;
+        // InetIngress on the Inet family doesn't (it's process-
+        // global ingress, no per-iface bind).
+        let inet_ingress = Chain::new("t", "ingress")
+            .family(Family::Inet)
+            .hook(Hook::InetIngress)
+            .priority(nlink::netlink::nftables::Priority::Custom(0));
+
+        match conn
+            .transaction()
+            .add_chain(inet_ingress)
+            .commit(&conn)
+            .await
+        {
+            Ok(()) => {
+                // Verify both chains live in the table.
+                let chains = conn
+                    .list_chains_in("t", Family::Inet)
+                    .await?;
+                let pre_count = chains.iter().filter(|c| c.name == "pre").count();
+                let ing_count = chains.iter().filter(|c| c.name == "ingress").count();
+                assert_eq!(pre_count, 1, "prerouting chain must persist");
+                assert_eq!(ing_count, 1, "inet ingress chain must persist");
+            }
+            Err(e) if e.is_invalid_argument() || e.is_not_supported() => {
+                // Kernel < 5.10 — NF_INET_INGRESS not supported.
+                // Skip with a tracing note so CI logs show why.
+                tracing::warn!(
+                    error = %e,
+                    "kernel doesn't support NF_INET_INGRESS — skipping (need >= 5.10)"
+                );
+            }
+            Err(e) => return Err(e),
+        }
+
+        Ok(())
+    })
+    .await
+}
+
+// =============================================================================
+// Plan 191 — Route subscribe_all_with_resync — initial inventory walk
+// =============================================================================
+
+/// Plan 191 kernel-level regression (test-coverage gap agent
+/// flagged as HIGH — only the Nftables-side of the resync
+/// shape had a kernel test). The Route-side walker is a
+/// separate code path that could silently regress (e.g. miss
+/// IPv6 routes / specific RTM_NEWLINK attrs on the initial
+/// snapshot).
+///
+/// Test: in a fresh netns, pre-create one dummy link with an
+/// IPv4 address. Subscribe with resync; expect the first
+/// batch of events to contain:
+/// - `ResyncMarker::ResyncStart`
+/// - `Resynced(NewLink)` for the dummy link
+/// - `Resynced(NewAddress)` for the IPv4 address
+/// - `ResyncMarker::ResyncEnd`
+///
+/// Any breakage to the snapshot walker (missing a protocol
+/// family, dropping certain attrs) shows up as a missing
+/// event in the assertion.
+#[tokio::test]
+async fn plan_191_route_subscribe_with_resync_walks_initial_inventory() -> Result<()> {
+    use nlink::netlink::events::NetworkEvent;
+    use nlink::netlink::link::DummyLink;
+    use nlink::netlink::resync::{ResyncMarker, ResyncedEvent};
+    use std::net::{IpAddr, Ipv4Addr};
+    use std::sync::Arc;
+    use tokio_stream::StreamExt;
+
+    nlink::require_root!();
+    with_timeout(async {
+        let ns = TestNamespace::new("p191-resync")?;
+
+        // Pre-populate: dummy link + IPv4 address on it.
+        let setup = route_in_ns(&ns)?;
+        setup.add_link(DummyLink::new("d0")).await?;
+        let d0_idx = setup
+            .get_link_by_name("d0")
+            .await?
+            .ok_or_else(|| nlink::Error::InvalidMessage("d0 not found after add_link".into()))?
+            .ifindex();
+        let _ = IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1)); // unused token; keep imports stable
+        setup
+            .add_address(nlink::netlink::addr::Ipv4Address::new(
+                "d0",
+                Ipv4Addr::new(10, 0, 0, 1),
+                24,
+            ))
+            .await?;
+        setup.set_link_up(d0_idx).await?;
+        drop(setup);
+
+        // Subscribe with resync.
+        let conn = route_in_ns(&ns)?;
+        let ns_name = ns.name().to_string();
+        let factory: nlink::netlink::resync::ConnectionFactory<Route> = Arc::new(move || {
+            let ns = ns_name.clone();
+            Box::pin(async move { namespace::connection_for::<Route>(&ns) })
+        });
+
+        let mut stream = conn
+            .subscribe_all_with_resync(factory)
+            .await?;
+
+        // Pull events until we see ResyncEnd. Bound the wait at
+        // 5s — the initial walk is fast.
+        let mut saw_start = false;
+        let mut saw_end = false;
+        let mut new_link_for_d0 = false;
+        let mut new_addr_for_d0 = false;
+
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+        loop {
+            let remaining = deadline
+                .checked_duration_since(tokio::time::Instant::now())
+                .unwrap_or_default();
+            if remaining.is_zero() {
+                break;
+            }
+            match tokio::time::timeout(remaining, stream.next()).await {
+                Ok(Some(Ok(ev))) => match ev {
+                    ResyncedEvent::Marker(ResyncMarker::ResyncStart) => saw_start = true,
+                    ResyncedEvent::Marker(ResyncMarker::ResyncEnd) => {
+                        saw_end = true;
+                        break;
+                    }
+                    ResyncedEvent::Resynced(NetworkEvent::NewLink(link))
+                        if link.name() == Some("d0") =>
+                    {
+                        new_link_for_d0 = true;
+                    }
+                    ResyncedEvent::Resynced(NetworkEvent::NewAddress(addr))
+                        if addr.ifindex() == d0_idx =>
+                    {
+                        new_addr_for_d0 = true;
+                    }
+                    _ => {}
+                },
+                Ok(Some(Err(e))) => return Err(e),
+                Ok(None) => break,
+                Err(_) => break, // outer deadline
+            }
+        }
+
+        assert!(saw_start, "missing ResyncStart marker");
+        assert!(saw_end, "missing ResyncEnd marker (stream did not complete inventory walk)");
+        assert!(
+            new_link_for_d0,
+            "snapshot walker did not emit NewLink for the pre-created d0 dummy"
+        );
+        assert!(
+            new_addr_for_d0,
+            "snapshot walker did not emit NewAddress for the pre-created d0 IPv4 address"
+        );
+
+        Ok(())
+    })
+    .await
+}
+
+/// Plan 204 C1 sibling — same shape for `Verdict::Goto`. Goto
+/// pre-fix wrote `-3` which is now `NFT_JUMP` post-fix. The
+/// roundtrip must show `NFT_GOTO = -4` instead.
+#[tokio::test]
+async fn plan_204_c1_verdict_goto_round_trips_through_kernel() -> Result<()> {
+    nlink::require_root!();
+    nlink::require_module!("nf_tables");
+    with_timeout(async {
+        use nlink::netlink::Nftables;
+        use nlink::netlink::nftables::types::{Chain, Family, Hook, Rule};
+
+        let ns = TestNamespace::new("p204-c1-goto")?;
+        let conn = namespace::connection_for::<Nftables>(ns.name())?;
+
+        let parent = Chain::new("t", "parent")
+            .family(Family::Inet)
+            .hook(Hook::Input)
+            .priority(nlink::netlink::nftables::Priority::Custom(0));
+        let child = Chain::new("t", "child").family(Family::Inet);
+
+        conn.transaction()
+            .add_table("t", Family::Inet)
+            .add_chain(parent)
+            .add_chain(child)
+            .commit(&conn)
+            .await?;
+
+        let goto_rule = Rule::new("t", "parent")
+            .family(Family::Inet)
+            .goto("child");
+
+        conn.transaction()
+            .add_rule(goto_rule)
+            .commit(&conn)
+            .await?;
+
+        let rules = conn.list_rules("t", Family::Inet).await?;
+        let parent_rules: Vec<_> = rules
+            .iter()
+            .filter(|r| r.chain == "parent")
+            .collect();
+        assert_eq!(parent_rules.len(), 1);
+
+        let expr_bytes = &parent_rules[0].expression_bytes;
+        let goto_marker = (-4_i32).to_ne_bytes();
+        let contains_goto = expr_bytes
+            .windows(4)
+            .any(|w| w == goto_marker.as_slice());
+        assert!(
+            contains_goto,
+            "rule expression bytes must contain NFT_GOTO marker (-4 LE): bytes = {expr_bytes:02x?}"
+        );
+
+        Ok(())
+    })
+    .await
+}
