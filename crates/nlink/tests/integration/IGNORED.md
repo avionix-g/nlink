@@ -28,6 +28,12 @@ or this catalog.
 |---|---|---|
 | `ct_subscribe_observes_destroy_event_on_del` | kernel-build-dependent | Synthetic ctnetlink-injected entries don't reliably generate visible Destroy events on every kernel build/config; the lib path works (other conntrack tests cover delete + subscribe independently). Run with `--ignored` locally to verify on a kernel where it works. |
 
+## concurrent_stress.rs
+
+| Test | Reason | Tracking |
+|---|---|---|
+| `concurrent_dumps_on_shared_connection_route_correctly` | tracking-plan-deferred | Documents the F1 architectural concurrency limitation: `Connection` isn't safe for shared-`Arc` concurrent dumps — the seq-filter at `connection.rs:536` drops other tasks' frames via `continue`, leaving them stuck. Workaround today is `ConnectionPool<Route>` (Plan 159). The proper fix (per-seq response router / NlRouter dispatch) is the F1 row in `plans/INDEX.md` ## 0.20 cycle seed. Un-ignore when F1 lands. |
+
 ## nftables_reconcile.rs
 
 All entries here were un-ignored when the `NftablesDiff` body-
