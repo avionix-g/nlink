@@ -879,9 +879,9 @@ impl Connection<Nftables> {
     /// }
     /// ```
     #[tracing::instrument(level = "info", skip(self), fields(groups = ?groups))]
-    pub fn subscribe(&mut self, groups: &[super::events::NftablesGroup]) -> Result<()> {
+    pub fn subscribe(&self, groups: &[super::events::NftablesGroup]) -> Result<()> {
         for g in groups {
-            self.socket_mut().add_membership(g.to_kernel_group())?;
+            self.socket().add_membership(g.to_kernel_group())?;
         }
         Ok(())
     }
@@ -891,7 +891,7 @@ impl Connection<Nftables> {
     /// Convenience for the typical "watch any ruleset mutation"
     /// pattern. Today equivalent to `subscribe(&[NftablesGroup::All])`;
     /// future kernel additions are picked up automatically.
-    pub fn subscribe_all(&mut self) -> Result<()> {
+    pub fn subscribe_all(&self) -> Result<()> {
         self.subscribe(&[super::events::NftablesGroup::All])
     }
 

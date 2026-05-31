@@ -32,7 +32,7 @@ use tokio_stream::StreamExt;
 
 #[tokio::main]
 async fn main() -> nlink::Result<()> {
-    let mut conn = Connection::<Route>::new()?;
+    let conn = Connection::<Route>::new()?;
     conn.subscribe(&[RtnetlinkGroup::Link])?;
 
     println!("subscribed to RTNLGRP_LINK; Ctrl-C to exit");

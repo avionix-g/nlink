@@ -92,7 +92,7 @@ fn format_mac(mac: &[u8; 6]) -> String {
 async fn main() -> Result<()> {
     let cli = Cli::parse();
     if matches!(cli.command, Command::Monitor) {
-        let mut conn = Connection::<Nl80211>::new_async().await?;
+        let conn = Connection::<Nl80211>::new_async().await?;
         conn.subscribe()?;
         eprintln!("Monitoring WiFi events (Ctrl+C to stop)...");
         let mut events = conn.events();

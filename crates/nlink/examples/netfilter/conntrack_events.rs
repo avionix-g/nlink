@@ -92,7 +92,7 @@ async fn run_watch() -> nlink::Result<()> {
     }
 
     println!("=== Watching host conntrack events (Ctrl-C to exit) ===\n");
-    let mut nf = Connection::<Netfilter>::new()?;
+    let nf = Connection::<Netfilter>::new()?;
     nf.subscribe(&[
         ConntrackGroup::New,
         ConntrackGroup::Update,
@@ -131,7 +131,7 @@ async fn run_demo(ns_name: &str) -> nlink::Result<()> {
     //   - sub: subscribed to multicast NEW + DESTROY, owned by the
     //     collector task.
     //   - act: used to inject + delete entries (which trigger events).
-    let mut sub: Connection<Netfilter> = namespace::connection_for(ns_name)?;
+    let sub: Connection<Netfilter> = namespace::connection_for(ns_name)?;
     sub.subscribe(&[ConntrackGroup::New, ConntrackGroup::Destroy])?;
     let act: Connection<Netfilter> = namespace::connection_for(ns_name)?;
 

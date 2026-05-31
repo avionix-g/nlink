@@ -1309,7 +1309,7 @@ impl Connection<Ethtool> {
     ///     println!("{:?}", event?);
     /// }
     /// ```
-    pub fn subscribe(&mut self) -> Result<()> {
+    pub fn subscribe(&self) -> Result<()> {
         self.subscribe_group(ETHTOOL_MCGRP_MONITOR)
     }
 }

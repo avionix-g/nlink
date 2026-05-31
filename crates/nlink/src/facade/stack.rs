@@ -70,11 +70,30 @@ impl Stack {
     /// Apply every set layer in dependency order to the
     /// host's default namespace.
     ///
-    /// Order: RTNETLINK → nftables → WireGuard. If any
-    /// layer's apply fails, the error propagates immediately
-    /// and the remaining layers are not attempted — the
-    /// kernel state is left partially applied.
+    /// Order: RTNETLINK → nftables → WireGuard.
+    ///
+    /// **0.19 N7 — pre-flight validation.** Before mutating any
+    /// layer, `apply()` calls `self.diff()` to validate every
+    /// set layer against current kernel state. If any layer's
+    /// diff fails (missing kernel module, invalid config,
+    /// permission error, family-resolution failure, missing
+    /// namespace, etc.), the whole apply bails BEFORE the first
+    /// mutation. This catches the high-value failure modes
+    /// that would otherwise leave the host in a partial state.
+    ///
+    /// **Residual race window.** Diff and apply are not atomic:
+    /// a peer disappearing between validation and apply still
+    /// leaves partial state. Use
+    /// [`NetworkConfig::apply_reconcile`](crate::netlink::config::NetworkConfig::apply_reconcile)
+    /// for the network layer if concurrent mutators are a
+    /// concern; nftables already uses an atomic single-batch
+    /// commit. True rollback would require a Reverse-Diff
+    /// abstraction across all layers — out of scope.
     pub async fn apply(&self) -> Result<StackApplyReport> {
+        // Pre-flight: validate every layer's diff succeeds
+        // before any kernel mutation.
+        let _validation = self.diff().await?;
+
         let mut report = StackApplyReport::default();
         if let Some(cfg) = &self.network {
             report.network = Some(apply::network(cfg).await?);
@@ -89,8 +108,13 @@ impl Stack {
     }
 
     /// Apply every set layer in dependency order to a named
-    /// namespace.
+    /// namespace. See [`Self::apply`] for the pre-flight
+    /// validation semantics.
     pub async fn apply_in_namespace(&self, ns: &str) -> Result<StackApplyReport> {
+        // Pre-flight: same as `apply()`. Validate against the
+        // target namespace before any mutation.
+        let _validation = self.diff_in_namespace(ns).await?;
+
         let mut report = StackApplyReport::default();
         if let Some(cfg) = &self.network {
             report.network = Some(apply::network_in_namespace(ns, cfg).await?);

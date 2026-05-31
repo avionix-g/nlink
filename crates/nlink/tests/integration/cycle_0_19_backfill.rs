@@ -431,7 +431,7 @@ async fn plan_204_c4_devlink_subscribe_resolves_config_group() -> Result<()> {
         // family resolution itself may still fail in restricted
         // CI containers — that's a different failure, not the
         // Plan 204 bug class.
-        let mut conn = match nlink::netlink::Connection::<nlink::netlink::Devlink>::new_async().await {
+        let conn = match nlink::netlink::Connection::<nlink::netlink::Devlink>::new_async().await {
             Ok(c) => c,
             Err(e) => {
                 eprintln!(

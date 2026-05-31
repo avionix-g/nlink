@@ -206,7 +206,7 @@ async fn ct_subscribe_observes_new_event() -> nlink::Result<()> {
     let ns = TestNamespace::new("ct-events")?;
     // Two namespace-scoped connections: one to mutate, one to subscribe.
     let nf_mut: Connection<Netfilter> = namespace::connection_for(ns.name())?;
-    let mut nf_sub: Connection<Netfilter> = namespace::connection_for(ns.name())?;
+    let nf_sub: Connection<Netfilter> = namespace::connection_for(ns.name())?;
 
     nf_sub.subscribe(&[ConntrackGroup::New])?;
     let mut events = nf_sub.events();
@@ -302,7 +302,7 @@ async fn ct_subscribe_observes_destroy_event_on_del() -> nlink::Result<()> {
     }
 
     let nf_mut: Connection<Netfilter> = namespace::connection_for(ns.name())?;
-    let mut nf_sub: Connection<Netfilter> = namespace::connection_for(ns.name())?;
+    let nf_sub: Connection<Netfilter> = namespace::connection_for(ns.name())?;
 
     // Inject first so there's something to destroy.
     let orig = ConntrackTuple::v4(Ipv4Addr::new(10, 0, 0, 1), Ipv4Addr::new(10, 0, 0, 2))

@@ -27,7 +27,7 @@ use tokio_stream::StreamExt;
 async fn main() -> nlink::Result<()> {
     println!("Monitoring ethtool events (Ctrl+C to stop)...\n");
 
-    let mut conn = Connection::<Ethtool>::new_async().await?;
+    let conn = Connection::<Ethtool>::new_async().await?;
 
     // Subscribe to the monitor multicast group
     conn.subscribe()?;

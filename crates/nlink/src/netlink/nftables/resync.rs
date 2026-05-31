@@ -165,7 +165,7 @@ impl Connection<Nftables> {
     /// borrowed access to the connection.
     #[tracing::instrument(level = "info", skip_all)]
     pub fn into_events_with_resync(
-        mut self,
+        self,
         factory: ConnectionFactory<Nftables>,
     ) -> Result<OwnedResyncStream> {
         self.subscribe_all()?;

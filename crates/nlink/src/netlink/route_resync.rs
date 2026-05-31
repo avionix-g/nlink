@@ -143,7 +143,7 @@ impl Connection<Route> {
     /// Plan 191 §2.6.
     #[tracing::instrument(level = "info", skip_all)]
     pub fn into_events_with_resync(
-        mut self,
+        self,
         factory: ConnectionFactory<Route>,
     ) -> Result<OwnedResyncStream> {
         self.subscribe_all()?;

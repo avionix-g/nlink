@@ -50,7 +50,7 @@ impl Connection<Devlink> {
     /// `"config"` group (the only one devlink ships in-tree).
     /// After subscribing, use `events()` or `into_events()` to
     /// receive events.
-    pub fn subscribe(&mut self) -> Result<()> {
+    pub fn subscribe(&self) -> Result<()> {
         self.subscribe_group(DEVLINK_MCGRP_NAME)
     }
 

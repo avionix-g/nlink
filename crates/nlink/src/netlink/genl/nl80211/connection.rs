@@ -66,7 +66,7 @@ impl Connection<Nl80211> {
     ///     println!("{:?}", event?);
     /// }
     /// ```
-    pub fn subscribe(&mut self) -> Result<()> {
+    pub fn subscribe(&self) -> Result<()> {
         let mut subscribed = false;
         for name in [
             NL80211_MCGRP_SCAN,
@@ -75,7 +75,7 @@ impl Connection<Nl80211> {
             NL80211_MCGRP_CONFIG,
         ] {
             if let Some(id) = self.state().mcast_groups.get(name).copied() {
-                self.socket_mut().add_membership(id)?;
+                self.socket().add_membership(id)?;
                 subscribed = true;
             }
         }

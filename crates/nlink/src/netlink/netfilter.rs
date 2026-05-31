@@ -867,9 +867,9 @@ impl Connection<Netfilter> {
     /// }
     /// ```
     #[tracing::instrument(level = "info", skip(self), fields(groups = ?groups))]
-    pub fn subscribe(&mut self, groups: &[ConntrackGroup]) -> Result<()> {
+    pub fn subscribe(&self, groups: &[ConntrackGroup]) -> Result<()> {
         for g in groups {
-            self.socket_mut().add_membership(g.to_kernel_group())?;
+            self.socket().add_membership(g.to_kernel_group())?;
         }
         Ok(())
     }
@@ -878,7 +878,7 @@ impl Connection<Netfilter> {
     /// `Destroy`). Skips the expectation groups (`ExpNew` /
     /// `ExpDestroy`) — those carry expectation messages, not entry
     /// messages, and can't be parsed as `ConntrackEntry`.
-    pub fn subscribe_all(&mut self) -> Result<()> {
+    pub fn subscribe_all(&self) -> Result<()> {
         self.subscribe(&[
             ConntrackGroup::New,
             ConntrackGroup::Update,

@@ -21,7 +21,7 @@ async fn test_link_events() -> Result<()> {
     nlink::require_module!("dummy");
 
     let ns = TestNamespace::new("linkev")?;
-    let mut conn = ns.connection()?;
+    let conn = ns.connection()?;
 
     // Subscribe to link events
     conn.subscribe(&[RtnetlinkGroup::Link])?;
@@ -53,7 +53,7 @@ async fn test_address_events() -> Result<()> {
     nlink::require_module!("dummy");
 
     let ns = TestNamespace::new("addrev")?;
-    let mut conn = ns.connection()?;
+    let conn = ns.connection()?;
 
     // Create dummy first
     conn.add_link(DummyLink::new("dummy0")).await?;
@@ -93,7 +93,7 @@ async fn test_tc_events() -> Result<()> {
     nlink::require_module!("dummy");
 
     let ns = TestNamespace::new("tcev")?;
-    let mut conn = ns.connection()?;
+    let conn = ns.connection()?;
 
     // Create dummy first
     conn.add_link(DummyLink::new("dummy0")).await?;
@@ -127,7 +127,7 @@ async fn test_subscribe_all() -> Result<()> {
     nlink::require_module!("dummy");
 
     let ns = TestNamespace::new("suball")?;
-    let mut conn = ns.connection()?;
+    let conn = ns.connection()?;
 
     // Subscribe to all common groups
     conn.subscribe_all()?;
@@ -154,7 +154,7 @@ async fn test_multiple_subscriptions() -> Result<()> {
     nlink::require_module!("dummy");
 
     let ns = TestNamespace::new("multisub")?;
-    let mut conn = ns.connection()?;
+    let conn = ns.connection()?;
 
     // Subscribe to multiple groups
     conn.subscribe(&[
@@ -178,7 +178,7 @@ async fn test_link_down_event() -> Result<()> {
     nlink::require_module!("dummy");
 
     let ns = TestNamespace::new("linkdown")?;
-    let mut conn = ns.connection()?;
+    let conn = ns.connection()?;
 
     // Create dummy first
     conn.add_link(DummyLink::new("dummy0")).await?;
@@ -213,7 +213,7 @@ async fn test_del_link_event() -> Result<()> {
     nlink::require_module!("dummy");
 
     let ns = TestNamespace::new("dellinkev")?;
-    let mut conn = ns.connection()?;
+    let conn = ns.connection()?;
 
     // Create dummy first
     conn.add_link(DummyLink::new("dummy0")).await?;
@@ -245,7 +245,7 @@ async fn test_del_address_event() -> Result<()> {
     nlink::require_module!("dummy");
 
     let ns = TestNamespace::new("deladdrev")?;
-    let mut conn = ns.connection()?;
+    let conn = ns.connection()?;
 
     // Create dummy and add address
     conn.add_link(DummyLink::new("dummy0")).await?;
@@ -282,7 +282,7 @@ async fn test_owned_event_stream() -> Result<()> {
     nlink::require_module!("dummy");
 
     let ns = TestNamespace::new("ownedstream")?;
-    let mut conn = ns.connection()?;
+    let conn = ns.connection()?;
 
     // Subscribe before converting to owned stream
     conn.subscribe(&[RtnetlinkGroup::Link])?;
@@ -315,7 +315,7 @@ async fn test_event_stream_continues() -> Result<()> {
     nlink::require_module!("dummy");
 
     let ns = TestNamespace::new("streamcont")?;
-    let mut conn = ns.connection()?;
+    let conn = ns.connection()?;
 
     // Subscribe to link events
     conn.subscribe(&[RtnetlinkGroup::Link])?;
@@ -348,7 +348,7 @@ async fn test_ipv6_address_events() -> Result<()> {
     nlink::require_module!("dummy");
 
     let ns = TestNamespace::new("addr6ev")?;
-    let mut conn = ns.connection()?;
+    let conn = ns.connection()?;
 
     // Create dummy first
     conn.add_link(DummyLink::new("dummy0")).await?;

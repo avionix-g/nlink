@@ -1951,8 +1951,13 @@ fn parse_nla<'a>(input: &mut &'a [u8]) -> Option<(u16, &'a [u8])> {
         return None;
     }
 
-    let len = u16::from_le_bytes([input[0], input[1]]) as usize;
-    let attr_type = u16::from_le_bytes([input[2], input[3]]);
+    // 0.19 N3 — netlink attribute nla_len / nla_type are kernel
+    // native-endian (per `struct nlattr` in include/uapi/linux/netlink.h
+    // and nlink's canonical `NlAttr` in `attr.rs` using zerocopy
+    // native-endian). Was `from_le_bytes` — silently broken on
+    // BE platforms.
+    let len = u16::from_ne_bytes([input[0], input[1]]) as usize;
+    let attr_type = u16::from_ne_bytes([input[2], input[3]]);
     *input = &input[4..];
 
     if len < 4 {
@@ -1985,7 +1990,8 @@ fn parse_algorithm(data: &[u8]) -> Option<XfrmAlgorithm> {
     }
 
     let name = parse_cstring(&data[..64]);
-    let key_len = u32::from_le_bytes([data[64], data[65], data[66], data[67]]);
+    // 0.19 N3 — `unsigned int alg_key_len` in xfrm.h is host-order.
+    let key_len = u32::from_ne_bytes([data[64], data[65], data[66], data[67]]);
     let key_bytes = (key_len as usize).div_ceil(8);
     let key = if data.len() >= 68 + key_bytes {
         data[68..68 + key_bytes].to_vec()
@@ -2004,8 +2010,9 @@ fn parse_aead_algorithm(data: &[u8]) -> Option<XfrmAlgorithmAead> {
     }
 
     let name = parse_cstring(&data[..64]);
-    let key_len = u32::from_le_bytes([data[64], data[65], data[66], data[67]]);
-    let icv_len = u32::from_le_bytes([data[68], data[69], data[70], data[71]]);
+    // 0.19 N3 — `alg_key_len` / `alg_icv_len` are host-order.
+    let key_len = u32::from_ne_bytes([data[64], data[65], data[66], data[67]]);
+    let icv_len = u32::from_ne_bytes([data[68], data[69], data[70], data[71]]);
     let key_bytes = (key_len as usize).div_ceil(8);
     let key = if data.len() >= 72 + key_bytes {
         data[72..72 + key_bytes].to_vec()
@@ -2029,8 +2036,9 @@ fn parse_auth_trunc_algorithm(data: &[u8]) -> Option<XfrmAlgorithmAuthTrunc> {
     }
 
     let name = parse_cstring(&data[..64]);
-    let key_len = u32::from_le_bytes([data[64], data[65], data[66], data[67]]);
-    let trunc_len = u32::from_le_bytes([data[68], data[69], data[70], data[71]]);
+    // 0.19 N3 — `alg_key_len` / `alg_trunc_len` are host-order.
+    let key_len = u32::from_ne_bytes([data[64], data[65], data[66], data[67]]);
+    let trunc_len = u32::from_ne_bytes([data[68], data[69], data[70], data[71]]);
     let key_bytes = (key_len as usize).div_ceil(8);
     let key = if data.len() >= 72 + key_bytes {
         data[72..72 + key_bytes].to_vec()

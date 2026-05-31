@@ -576,7 +576,7 @@ async fn monitor_events() -> nlink::Result<()> {
 
     println!("Monitoring ethtool events (Ctrl+C to stop)...\n");
 
-    let mut conn = Connection::<Ethtool>::new_async().await?;
+    let conn = Connection::<Ethtool>::new_async().await?;
     conn.subscribe()?;
 
     let mut events = conn.events();

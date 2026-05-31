@@ -45,7 +45,7 @@ impl MonitorCmd {
             .with_opts(*opts);
 
         // Create connection and subscribe to TC events
-        let mut conn = Connection::<Route>::new()?;
+        let conn = Connection::<Route>::new()?;
         conn.subscribe(&[RtnetlinkGroup::Tc])?;
 
         let mut stdout = std::io::stdout().lock();

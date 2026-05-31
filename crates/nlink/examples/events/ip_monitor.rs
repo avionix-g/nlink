@@ -20,7 +20,7 @@ async fn main() -> nlink::netlink::Result<()> {
     println!("Monitoring network events (Ctrl+C to stop)...");
     println!("Try: sudo ip link add dummy0 type dummy\n");
 
-    let mut conn = Connection::<Route>::new()?;
+    let conn = Connection::<Route>::new()?;
 
     // Subscribe to all IP-related events (like `ip monitor all`)
     conn.subscribe(&[

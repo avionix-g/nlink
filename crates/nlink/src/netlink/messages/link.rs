@@ -1,6 +1,6 @@
 //! Strongly-typed link message.
 
-use winnow::{binary::le_u16, prelude::*, token::take};
+use winnow::{prelude::*, token::take};
 
 use crate::netlink::{
     error::Result,
@@ -548,8 +548,11 @@ impl FromNetlink for LinkMessage {
 
         // Parse attributes
         while !input.is_empty() && input.len() >= 4 {
-            let len = le_u16.parse_next(input)? as usize;
-            let attr_type = le_u16.parse_next(input)?;
+            // 0.19 N9 — nla_len/nla_type are host-order, not LE.
+            let len_bytes: &[u8] = take(2usize).parse_next(input)?;
+            let type_bytes: &[u8] = take(2usize).parse_next(input)?;
+            let len = u16::from_ne_bytes(len_bytes.try_into().unwrap()) as usize;
+            let attr_type = u16::from_ne_bytes(type_bytes.try_into().unwrap());
 
             if len < 4 {
                 break;

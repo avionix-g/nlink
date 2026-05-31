@@ -151,7 +151,7 @@ async fn scan(iface: &str) -> nlink::Result<()> {
         .unwrap();
     let ifindex = iface_info.ifindex;
 
-    let mut evt = Connection::<Nl80211>::new_async().await?;
+    let evt = Connection::<Nl80211>::new_async().await?;
     evt.subscribe()?;
 
     println!("Triggering scan on {iface} (ifindex {ifindex})...");

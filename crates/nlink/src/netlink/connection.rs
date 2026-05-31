@@ -264,11 +264,6 @@ impl<P: ProtocolState> Connection<P> {
         &self.socket
     }
 
-    /// Get a mutable reference to the underlying socket.
-    pub(crate) fn socket_mut(&mut self) -> &mut NetlinkSocket {
-        &mut self.socket
-    }
-
     /// Get the protocol state.
     pub fn state(&self) -> &P {
         &self.state
@@ -457,7 +452,21 @@ impl<P: ProtocolState> Connection<P> {
             let response = self.socket.recv_msg().await?;
             let mut found_seq = false;
             for result in MessageIter::new(&response) {
-                let (header, payload) = result?;
+                // 0.19 N2 — Plan 193 §2.3 rule 3 extension. When a
+                // `Connection<P>` is both subscribed (multicast) and
+                // performing requests, the recv loop sees BOTH our
+                // unicast reply AND unrelated multicast frames. A
+                // malformed multicast frame (corrupted kernel, future
+                // protocol extension) used to kill the unrelated
+                // request via `?`. Skip parse failures silently so
+                // long-lived subscribers + requests on the same
+                // socket survive a single malformed frame.
+                let Ok((header, payload)) = result else {
+                    tracing::trace!(
+                        "send_request: skipping malformed frame in shared recv loop"
+                    );
+                    continue;
+                };
                 if header.nlmsg_seq != seq {
                     continue;
                 }
@@ -497,7 +506,13 @@ impl<P: ProtocolState> Connection<P> {
         loop {
             let response = self.socket.recv_msg().await?;
             for result in MessageIter::new(&response) {
-                let (header, payload) = result?;
+                // 0.19 N2 — see send_request_inner.
+                let Ok((header, payload)) = result else {
+                    tracing::trace!(
+                        "send_ack: skipping malformed frame in shared recv loop"
+                    );
+                    continue;
+                };
                 if header.nlmsg_seq != seq {
                     continue;
                 }
@@ -565,7 +580,13 @@ impl<P: ProtocolState> Connection<P> {
 
             for data in batch.iter() {
                 for result in MessageIter::new(data) {
-                    let (header, payload) = result?;
+                    // 0.19 N2 — see send_request_inner.
+                    let Ok((header, payload)) = result else {
+                        tracing::trace!(
+                            "send_dump: skipping malformed frame in shared recv loop"
+                        );
+                        continue;
+                    };
 
                     // Check sequence number
                     if header.nlmsg_seq != seq {
@@ -714,7 +735,7 @@ impl Connection<Route> {
     /// conn.subscribe(&[RtnetlinkGroup::Link, RtnetlinkGroup::Tc])?;
     /// ```
     #[instrument(level = "info", skip(self), fields(groups = ?groups))]
-    pub fn subscribe(&mut self, groups: &[RtnetlinkGroup]) -> Result<()> {
+    pub fn subscribe(&self, groups: &[RtnetlinkGroup]) -> Result<()> {
         for group in groups {
             self.socket.add_membership(group.to_group())?;
         }
@@ -735,7 +756,7 @@ impl Connection<Route> {
     /// let mut events = conn.events();
     /// ```
     #[instrument(level = "info", skip_all)]
-    pub fn subscribe_all(&mut self) -> Result<()> {
+    pub fn subscribe_all(&self) -> Result<()> {
         self.subscribe(&[
             RtnetlinkGroup::Link,
             RtnetlinkGroup::Ipv4Addr,
