@@ -78,6 +78,43 @@ All notable changes to this project will be documented in this file.
 
 ### Added
 
+- **High-level facade APIs (Plan 200)** — three thin
+  compositional wrappers + a unified `Stack` type that
+  collapse the typed surface's 5–15-line boilerplate into
+  one-liners.
+  - `nlink::facade::apply::network(cfg).await?` — opens a
+    fresh `Connection<Route>` + calls `apply`.
+    Same shape for `nftables(...)` (computes diff +
+    applies), `wireguard(...)` (uses the async GENL
+    family-resolution path). `*_in_namespace(ns, cfg)`
+    siblings for each.
+  - `nlink::facade::diff::*` — symmetric drift-detection
+    wrappers (NetworkConfig → ConfigDiff, NftablesConfig →
+    NftablesDiff, WireguardConfig → WireguardConfigDiff).
+  - `nlink::facade::watch::route_changes()` —
+    one-line resync-wrapped event stream for RTNETLINK
+    (mirrors Plan 191's `into_events_with_resync` with the
+    factory closure built for you). `nftables_changes()`
+    same for Plan 185. `wireguard_changes(opts).await?`
+    returns a `WireguardWatcher` for the polling path
+    (Plan 199 — kernel has no multicast).
+  - `nlink::facade::Stack` — bundles `NetworkConfig` +
+    `NftablesConfig` + `WireguardConfig` with optional
+    layers. `Stack::apply` calls them in dependency order
+    (RTNETLINK → nftables → WireGuard), returning a
+    `StackApplyReport` with per-layer counters.
+    `Stack::diff` aggregates per-layer diffs into
+    `StackDiff::is_empty()` for fast "is anything dirty"
+    checks.
+  - ovpn intentionally absent — the kernel ovpn family is
+    bleeding-edge (6.16+) and nlink ships only the link
+    half (Plan 190 §2.3b). Plan 197 (GENL-side ovpn
+    declarative) needs the imperative ovpn GENL family
+    implemented first; deferred to a future cycle for
+    kernel-ABI stability.
+  3 unit tests on the `StackDiff` / `StackApplyReport`
+  no-op semantics.
+
 - **Declarative WireGuard configuration (Plan 196)** —
   the GENL-family twin of `NetworkConfig` / `NftablesConfig`.
   `WireguardConfig::new().device("wg0", |d| ...)` builder
