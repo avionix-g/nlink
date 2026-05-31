@@ -1039,6 +1039,261 @@ All notable changes to this project will be documented in this file.
   No consumer action required — the lib already follows the
   rules; the policy + gate prevent future drift.
 
+### Post-cycle audit batch (closes F1 + N1-N9 + Findings A-D)
+
+A four-agent adversarial audit run after the main 0.19 cycle
+work surfaced one more architectural bug, twelve correctness
+bugs, and four test-coverage gaps. All eleven verified findings
+shipped; Finding E was refuted (false-positive). Tracked
+internally as Plan 194 closeout + the post-audit batch.
+
+#### Breaking changes (post-cycle batch)
+
+- **`Connection<P>::events()` / `into_events()` are now `async`
+  (Finding B).** Acquires the connection's request lock for the
+  stream's lifetime so concurrent streams on a shared
+  `Arc<Connection>` no longer race on `poll_recv`. Same change
+  cascades through:
+  - `Connection<Route>::into_events_with_resync` / `subscribe_all_with_resync` → `async fn`
+  - `Connection<Nftables>::into_events_with_resync` / `subscribe_all_with_resync` → `async fn`
+  - `nlink::facade::watch::{route_changes,route_changes_in_namespace,nftables_changes,nftables_changes_in_namespace}` → `async fn`
+
+  Migration: add `.await` at every call site. ~30 line changes
+  across nlink's own bins/examples; downstream consumers will
+  see a wave of "future used without await" errors during the
+  bump.
+
+- **`Connection<P>::subscribe()` / `subscribe_all()` /
+  `subscribe_group()` flipped `&mut self` → `&self`
+  (Finding A).** The underlying syscall is
+  `setsockopt(SOL_NETLINK, NETLINK_ADD_MEMBERSHIP)` which is
+  fd-level; the `&mut` was a stale artefact of routing through
+  `AsyncFd::get_mut`. Same fix on:
+  - `Connection<Nftables>::subscribe` / `subscribe_all` / `subscribe_all_with_resync`
+  - `Connection<Netfilter>::subscribe` / `subscribe_all`
+  - `Connection<Wireguard|Macsec|Mptcp|Ethtool|Nl80211|Devlink>::subscribe`
+  - `Connection<Route>::subscribe_all_with_resync`
+  - GENL macro-generated `subscribe_group` on macro-defined families
+  - Internal `NetlinkSocket::add_membership` / `drop_membership`
+
+  Migration: remove `mut` from `Connection<P>` bindings if it
+  was only there for `subscribe*`. ConnectionPool's
+  `PooledConnection` now supports `pool.acquire().await?.subscribe_all()?`
+  — concurrent subscribe from multiple tasks sharing
+  `Arc<Connection>` is also a legitimate pattern now.
+
+- **`Connection::socket_mut()` removed.** Was the last
+  `&mut self` accessor on Connection; obsolete now that
+  `add_membership` is `&self`. Internal API (`pub(crate)`);
+  the lib's own callers refactored to `self.socket().add_membership(group)`.
+
+- **`Connection<P>::request_lock` field type:
+  `Mutex<()>` → `Arc<Mutex<()>>` (Finding B prerequisite).**
+  Required so streams can hold an `OwnedMutexGuard` whose
+  lifetime is independent of the parent's borrow scope.
+  `#[non_exhaustive]` struct so this is source-compatible for
+  downstream code that never constructed a Connection literal,
+  which is all of them (the constructor is `Connection::<P>::new()`).
+
+#### Concurrency: F1 closed across all protocols
+
+- **F1 — `Connection<P>` request lock** closes the rtnetlink
+  #131 shape: two tasks sharing `Arc<Connection<P>>` would race
+  on the recv side, with task A's recv loop consuming task B's
+  response from the socket buffer and discarding it via the
+  seq filter. Both tasks then blocked indefinitely (or surfaced
+  `Error::Timeout` after Plan 171's 30s default). Added
+  `tokio::sync::Mutex` on `Connection<P>`, acquired at every
+  send+recv-loop method via a new `pub(crate) lock_request()`
+  helper.
+
+  Coverage swept across the central methods in `connection.rs`
+  (send_request_inner, send_ack_inner, send_dump_inner) plus
+  every protocol-specific send+recv-loop in
+  `genl/{wireguard,macsec,mptcp,ethtool,nl80211,devlink}/connection.rs`,
+  `nftables/connection.rs`, `sockdiag.rs`, `xfrm.rs`, `audit.rs`,
+  `netfilter.rs`, `fib_lookup.rs`, `batch.rs`, plus the public
+  GENL escape hatches `Connection<P>::command()` /
+  `dump_command()` (initially missed in the lock sweep — closed
+  in a follow-up commit). 42+ acquire sites across 14 files.
+
+  Regression coverage: Plan 194's
+  `concurrent_dumps_on_shared_connection_route_correctly` test
+  (originally `#[ignore]`'d when this bug was discovered) is
+  now green on CI. A second
+  `concurrent_ack_requests_on_shared_connection_succeed` test
+  added for ACK-style coverage.
+
+  Trade-off: concurrent ops on a shared `Arc<Connection>` now
+  serialize cleanly (the kernel processes a single socket FIFO
+  anyway). For true parallel throughput use
+  `ConnectionPool<P>` — each task gets its own connection.
+
+- **Finding B — `DumpStream` + `EventSubscription` lifetime
+  lock.** Stream-shape APIs were the remaining concurrency
+  hole: two `DumpStream`s on a shared connection would both
+  call `socket.poll_recv` and steal each other's frames.
+  Closed by storing an `OwnedMutexGuard<()>` inside each stream
+  struct; acquired in the async constructor, released on stream
+  drop. See breaking-change entries above for the API-shape
+  fallout.
+
+#### Verified bugs (post-cycle audit)
+
+- **N1 (CRITICAL) — `namespace::create` thread-bleed.**
+  `unshare(CLONE_NEWNET)` is scoped to the calling *thread*,
+  not the process. When called from a tokio worker thread
+  (`LabNamespace::new` in tests, app code that creates netns
+  via tokio runtime), every other tokio task scheduled on that
+  worker temporarily observed the new empty namespace until the
+  matching `setns()` restored it — including any `Connection<P>`
+  they constructed, which silently bound to the wrong netns.
+  Fix: isolate the unshare+mount+setns sequence on a freshly
+  `std::thread::spawn`'d worker so the bleed is bounded to a
+  dedicated thread that does nothing else.
+
+- **N2 (HIGH) — Malformed multicast frame killed unrelated
+  request.** When a `Connection<P>` was both subscribed
+  (multicast) and performing requests, the recv loop saw both
+  unicast replies AND multicast frames through the same
+  `recv_msg().await`. A `?` propagation on `MessageIter` parse
+  errors fired BEFORE the seq filter could discard the frame,
+  killing the request. Fixed: skip parse failures silently in
+  the per-frame loop (extends Plan 193 §2.3 rule 3 to
+  subscribed-connection request paths). 3 recv loops in
+  connection.rs touched.
+
+- **N3 (HIGH) — `xfrm.rs` `from_le_bytes` on host-order fields.**
+  4 sites used `u16::from_le_bytes` / `u32::from_le_bytes` for
+  netlink attribute headers and XFRM algo fields, which the
+  kernel emits in host byte order. Silently broken on big-endian
+  platforms (s390x, sparc64, PowerPC-BE). Fixed to
+  `from_ne_bytes`. On LE hosts `to_le_bytes` and `to_ne_bytes`
+  coincide so this regressed silently; the audit caught it via
+  kernel-source cross-check.
+
+- **N4 (HIGH) — `RouteMessage::write_to` dropped 5 fields.**
+  `source`, `iif`, `pref`, `expires`, `multipath` (the Plan 202
+  ECMP nexthop chain) were parsed but never written, silently
+  dropping them on `get → mutate → set` round-trips. Added 5
+  builder setters (`.source(addr, prefix_len)`, `.iif(ifindex)`,
+  `.pref(p)`, `.expires(secs)`, `.multipath(Vec<ParsedNextHop>)`)
+  + 5 emit branches + a `write_attr_multipath` helper that
+  mirrors `parse_multipath` (rtnexthop chain with nested
+  RTA_GATEWAY). ECMP route replay through the typed API works
+  now. Roundtrip regression test added.
+
+- **N5 (HIGH) — `NeighborMessage::write_to` dropped 6 fields.**
+  `probes`, `port` (BIG-endian — VXLAN UDP port), `vni`,
+  `ifindex_attr`, `master`, `cache_info` were parsed but never
+  written. Blocked typed VXLAN FDB programming via
+  `NeighborMessageBuilder` — users had to drop to raw
+  `MessageBuilder`. Added 6 builder setters + 6 emit branches +
+  `write_attr_u16_be` (for NDA_PORT) + `write_attr_cache_info`.
+  Roundtrip regression test added.
+
+- **N6 (HIGH) — `WireguardWatcher::next_events` first-failure
+  killed whole watcher.** Plan 199's per-interface loop used
+  `?` to propagate `get_device_by_name` errors. Deleting one
+  watched interface out-of-band aborted the entire poll cycle —
+  all other interfaces' updates silently dropped, watcher
+  stuck. Fixed: `match` on each per-iface result, log
+  `tracing::warn!` on error, emit `PeerRemoved` for tracked
+  peers on the failed iface, drop it from `self.previous`,
+  continue.
+
+- **N7 (HIGH) — `Stack::apply` had no pre-flight validation.**
+  Failure in the WireGuard layer after network + nftables
+  succeeded left the host in a partial state (interfaces +
+  firewall up, no VPN). Fixed: call `self.diff().await?` first
+  to validate every set layer against current kernel state
+  before any mutation. Catches the high-value failure modes
+  (missing kernel module, invalid key, family-resolution
+  failure, permission, missing netns). Residual race window
+  documented in the rustdoc.
+
+- **N8 (MEDIUM) — `parse_af_spec_vlans` / `_tunnels` dropped
+  orphan RANGE_BEGIN.** Consecutive RANGE_BEGIN markers (no
+  intervening RANGE_END) silently overwrote the prior
+  `range_start` and dropped the entire prior range. Trailing
+  RANGE_BEGIN at end of chain also dropped. Plan 193 rule 2
+  ("pathological-length input guards") requires defensive
+  handling. Fixed: emit prior `range_start` as a single
+  VLAN/tunnel with a `tracing::warn!`, then start the new
+  range. Symmetric fix for the VLAN + tunnel parsers.
+
+- **N9 (MEDIUM) — 6 sibling parsers used `le_u16` for
+  host-order `nla_len`/`nla_type` + wrong mask in `rule.rs`.**
+  `messages/{rule,address,link,neighbor,route,tc}.rs` all
+  parsed `struct nlattr` headers as little-endian. Also
+  `rule.rs` masked `0x7fff` instead of canonical
+  `NLA_TYPE_MASK = 0x3fff`, so any future kernel attr shipped
+  with `NLA_F_NET_BYTEORDER` would silently miss every match
+  arm. Fixed all 6 to `take(2)` + `from_ne_bytes` (winnow has
+  no `ne_u16`); rule.rs uses `NLA_TYPE_MASK`.
+
+- **Finding A (HIGH) — subscribe blocked through ConnectionPool.**
+  See breaking changes above.
+
+- **Finding C (MEDIUM) — `Pool::invalidate` capacity decay.**
+  `PooledConnection::invalidate` dropped the broken connection
+  without replacing it. After N invalidates a size-N pool's
+  `acquire()` would block indefinitely. Fixed: added a
+  `Factory<P>` trait on `PoolInner` capturing the namespace +
+  sync/async build mode. `invalidate` now `tokio::spawn`s a
+  task that calls `factory.build().await` and `try_send`s the
+  replacement into the pool's mpsc. Capacity recovers.
+  Integration test
+  (`pool_invalidate_replenishes_capacity`) asserts the
+  replenish lands.
+
+- **Finding D (LOW) — `Connector::send_proc_control` missed F1
+  lock.** Send-only path didn't acquire `request_lock`,
+  violating the doc invariant. Fixed: acquire the lock for the
+  send. Also corrected misleading comment "NLMSG_DONE" → the
+  actual value (0) is NLMSG_NOOP. No ACK to drain
+  (`NLM_F_ACK` is not set; cn_proc doesn't emit one).
+
+- **Finding E — `Batch::send_chunk` stale-seq window: REFUTED.**
+  Original audit agent claimed the recv loop's seq matching
+  accepted stale frames from earlier requests via a `> end_seq`
+  window check. Re-read: the code uses per-op exact seq
+  matching (`ops.iter().position(|op| op.seq == header.nlmsg_seq)`),
+  not a window. Agent hallucinated the check. No fix needed;
+  documented for future audit cycles.
+
+#### Test backfill
+
+- **Plan 204 C1 — Verdict::Jump + Verdict::Goto kernel
+  round-trip.** Asserts the rule survives the kernel commit
+  AND the raw `NFTA_RULE_EXPRESSIONS` bytes contain the
+  big-endian encoding of the correct verdict constants
+  (`NFT_JUMP = -3`, `NFT_GOTO = -4`) and NOT the pre-fix wrong
+  constant (`NFT_BREAK = -2`). CI surfaced that
+  `NFTA_VERDICT_CODE` is actually `__be32` on the wire — the
+  test correctly uses `to_be_bytes()` to assert the
+  protocol-correct encoding.
+
+- **Plan 211 M1 — `Hook::InetIngress` kernel acceptance.**
+  Installs a Prerouting chain AND an InetIngress chain at the
+  same priority on the same Inet family table. Pre-fix the
+  second chain would EEXIST (both aliased to hook 0); post-fix
+  InetIngress = NF_INET_INGRESS (5) so they coexist. Skips
+  gracefully on kernels < 5.10.
+
+- **Plan 191 — Route `subscribe_all_with_resync` live events.**
+  Asserts that a live multicast event (a dummy link addition)
+  arrives wrapped in `ResyncedEvent::Event(NewLink)` through the
+  resync stream. The Route-side glue is a separate code path
+  from the Nftables side; this guards against a silent
+  regression that would drop the wrapper.
+
+- **F1 sweep gap — `concurrent_ack_requests_on_shared_connection_succeed`.**
+  Extends Plan 194's regression coverage to ACK-style ops.
+  16 concurrent `add_link` calls on a shared
+  `Arc<Connection<Route>>`; all must succeed and the final
+  dump must see all 16 dummies.
+
 ## [0.18.0] - 2026-05-29
 
 ### Added
