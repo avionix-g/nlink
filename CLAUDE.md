@@ -328,6 +328,51 @@ the underlying sockopt:
   `"attribute IFLA_MTU rejected: value 0 out of range (at request
   offset 24)"`. See `Error::Kernel::ext_ack`.
 
+### Concurrency (0.19 F1 fix)
+
+`Connection<P>` is `Send + Sync` and safe to share across tokio
+tasks via `Arc<Connection<P>>`. Every request/response method
+acquires an internal `tokio::sync::Mutex` so concurrent callers
+serialize cleanly instead of racing on `recv_msg`. Trade-off:
+shared-`Arc<Connection>` requests run in sequence rather than
+in parallel. For true parallel throughput use
+`ConnectionPool<P>` — each task gets its own connection (and
+its own kernel-side socket queue, which the kernel processes
+in parallel).
+
+**Stream-shape APIs hold the lock for their lifetime.**
+`conn.events().await`, `conn.into_events().await`,
+`conn.dump_stream::<T>(...).await?` and the
+`*_with_resync` constructors are now **async** (0.19 Finding B).
+A long-lived events subscriber blocks concurrent requests on
+the same Connection until dropped. Use a second Connection
+or `ConnectionPool` for query-in-parallel patterns.
+
+```rust
+// Sharing a Connection across tasks — serialized but correct.
+let conn = Arc::new(Connection::<Route>::new()?);
+for _ in 0..16 {
+    let c = conn.clone();
+    tokio::spawn(async move { c.get_links().await });
+}
+
+// Parallel fanout via the pool — each task gets its own socket.
+let pool = Arc::new(ConnectionPool::<Route>::new(8)?);
+for _ in 0..16 {
+    let p = pool.clone();
+    tokio::spawn(async move { p.acquire().await?.get_links().await });
+}
+
+// subscribe() is now `&self` (0.19 Finding A) — works through
+// the pool, and concurrent subscribe from multiple tasks
+// sharing an Arc<Connection> is a legitimate pattern.
+pool.acquire().await?.subscribe_all()?;
+```
+
+The full per-seq response router (NlRouter-style dispatcher)
+that would unlock interleaved events + requests on a single
+socket is queued for 0.20 — see `plans/INDEX.md` "F1 follow-on".
+
 ## Errors
 
 All public methods return `nlink::Result<T>`. The error type is
@@ -542,21 +587,17 @@ run it locally before merging a new example.
 
 ## Active work
 
-**0.16.0 shipped 2026-05-25** (`v0.16.0` tagged; both crates on
-crates.io). The cycle's headline additions are documented in
-`CHANGELOG.md ## [0.16.0]` + `docs/migration_guide/0.15.1-to-0.16.0.md`
-— the cycle's per-plan scaffolding was deleted post-cut per
-convention.
+**0.18.0 shipped 2026-05-29** (`v0.18.0` tagged; both crates on
+crates.io). Headline additions in `CHANGELOG.md ## [0.18.0]`
++ `docs/migration_guide/0.17.0-to-0.18.0.md`.
 
-The **0.17 cycle is complete** on the `0.17` branch (do not push
-to master); workspace at 0.17.0 awaiting maintainer cut via
-`scripts/cut-release.sh 0.17.0`. The cycle's narrative + per-
-feature entries live in
+The **0.19 cycle is complete** on the `0.19` branch (do not push
+to master); workspace at 0.19.0 awaiting maintainer cut via
+`scripts/cut-release.sh 0.19.0`. The cycle's narrative lives in
 [`CHANGELOG.md ## [Unreleased]`](CHANGELOG.md) (will become
-`## [0.17.0]` on cut) and the migration walkthrough in
-[`docs/migration_guide/0.16.0-to-0.17.0.md`](docs/migration_guide/0.16.0-to-0.17.0.md).
-Day-to-day status tracker for any in-flight or queued follow-ups
-is [`plans/INDEX.md`](plans/INDEX.md).
+`## [0.19.0]` on cut) and the migration walkthrough in
+[`docs/migration_guide/0.18.0-to-0.19.0.md`](docs/migration_guide/0.18.0-to-0.19.0.md).
+Day-to-day status tracker is [`plans/INDEX.md`](plans/INDEX.md).
 
 Per-release upgrade guides:
 [`docs/migration_guide/`](docs/migration_guide/README.md) — write

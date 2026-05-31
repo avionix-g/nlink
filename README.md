@@ -82,7 +82,7 @@ async fn main() -> nlink::Result<()> {
     
     // Monitor events
     conn.subscribe(&[RtnetlinkGroup::Link, RtnetlinkGroup::Ipv4Addr])?;
-    let mut events = conn.events();
+    let mut events = conn.events().await;
     
     while let Some(result) = events.next().await {
         match result? {
@@ -272,6 +272,72 @@ The library API is production-ready for network monitoring and configuration.
 - Typed error promotion (InterfaceNotFound, QdiscNotFound) with operation context
 - Name-based address operations (add_address_by_name, replace_address_by_name)
 - Bond/bridge enslavement helper (enslave/enslave_by_index)
+
+**New in 0.19:**
+
+- **F1 closed — `Connection<P>` safe under concurrent shared
+  `Arc<Connection>` use.** A `tokio::sync::Mutex` guards every
+  send+recv-loop cycle so two tasks dumping links simultaneously
+  no longer steal each other's response frames. The seq filter
+  remains as a defensive backstop. Stream-shape APIs
+  (`DumpStream`, `EventSubscription`, `OwnedEventStream`) hold
+  the lock for their lifetime; concurrent dumps on a shared
+  Connection serialize cleanly. For true parallel throughput,
+  use `ConnectionPool<P>`.
+- **`Connection<P>::events()` / `into_events()` / `*_with_resync`
+  constructors / `facade::watch::*` are now async** (Finding B
+  fallout). Add `.await` at the call site.
+- **`subscribe()` / `subscribe_all()` / `subscribe_group()` now
+  take `&self`** (Finding A). Drop the `mut` from
+  `let mut conn = …`. `ConnectionPool::acquire().await?.subscribe_all()?`
+  now compiles.
+- **`PooledConnection::invalidate` replenishes the pool** —
+  schedules an async task that rebuilds a replacement connection
+  via the new `Factory<P>` trait. Capacity no longer decays per
+  invalidate. (Finding C)
+- **`RouteMessage::write_to` + `NeighborMessage::write_to`
+  closed write-parse asymmetries.** Added 5 builder setters on
+  `RouteMessageBuilder` (`source`, `iif`, `pref`, `expires`,
+  `multipath`) and 6 on `NeighborMessageBuilder` (`probes`,
+  `port`, `vni`, `ifindex_attr`, `master`, `cache_info`).
+  Typed VXLAN FDB programming now works end-to-end via
+  `NeighborMessageBuilder`. (N4 + N5)
+- **`Stack::apply` now runs `self.diff().await?` first** as a
+  pre-flight validation gate, catching kernel-module-missing
+  / invalid-config / permission failures before any mutation.
+  (N7)
+- **`namespace::create` isolates the unshare+mount+setns dance**
+  on a dedicated `std::thread`, eliminating netns-membership
+  bleed into co-scheduled tokio worker tasks. Critical for
+  `LabNamespace::new` in tests + app code that creates netns
+  in the tokio runtime. (N1)
+- **`WireguardWatcher::next_events` is per-interface resilient**
+  — one failed iface emits `PeerRemoved` for its tracked peers
+  and the rest of the poll continues. Plan 199's reliability
+  claim now holds. (N6)
+- **nftables verdict constants corrected** — `NFT_JUMP = -3`,
+  `NFT_GOTO = -4` (was `-2`/`-3`; `-2` is `NFT_BREAK`). Every
+  `Verdict::Jump(chain)` rule pre-0.19 was silently a "break"
+  (terminate rule eval). Source-level no-op for users. (Plan 204 C1)
+- **`Hook::Ingress` split into `Hook::NetdevIngress` (hook 0,
+  for Family::Netdev/Bridge) and `Hook::InetIngress` (hook 5,
+  for Family::Inet, kernel 5.10+)**; new `Hook::NetdevEgress`
+  for symmetry. Validates via
+  `Hook::is_valid_for_family(Family)`. (Plan 211 M1)
+- **6 sibling parsers + `xfrm.rs` no longer use `from_le_bytes`
+  for kernel-native fields** — silently broken on big-endian
+  platforms (s390x, sparc64, PowerPC-BE). (N3, N9)
+- **Build-time `sizeof(struct ...)` CI gate** prevents wire-
+  format drift from recurring. Surfaced one sibling bug
+  (`XfrmUserTmpl` 62→64) the moment it shipped. (Plan 213)
+- **DPLL `phase_offset` widened to `Option<i64>`** (was
+  `Option<i32>`) — kernel field is `s64` (attoseconds × 1000).
+  Telco/PTP/SyncE values routinely exceed `i32::MAX`. Type
+  annotation needs update at call sites. (Plan 206)
+- **`ApplyOptions::with_purge` removed** — the feature was
+  silently non-functional in 0.18. For "remove undeclared
+  resources" use the imperative `Connection::del_*` methods.
+  (Plan 205)
 
 **New in 0.17:**
 
