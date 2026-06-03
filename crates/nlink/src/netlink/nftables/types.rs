@@ -1160,31 +1160,14 @@ impl Rule {
     /// rule.match_l4proto(6)
     /// ```
     pub fn match_l4proto(mut self, proto: u8) -> Self {
-        use super::expr::Expr;
-        self.exprs.push(Expr::Meta {
-            dreg: Register::R0,
-            key: MetaKey::L4Proto,
-        });
-        self.exprs.push(Expr::Cmp {
-            sreg: Register::R0,
-            op: CmpOp::Eq,
-            data: vec![proto],
-        });
+        self.push_meta_eq(MetaKey::L4Proto, proto);
         self
     }
 
     /// Match TCP source port.
     pub fn match_tcp_sport(mut self, port: u16) -> Self {
         use super::expr::Expr;
-        self.exprs.push(Expr::Meta {
-            dreg: Register::R0,
-            key: MetaKey::L4Proto,
-        });
-        self.exprs.push(Expr::Cmp {
-            sreg: Register::R0,
-            op: CmpOp::Eq,
-            data: vec![6u8], // IPPROTO_TCP
-        });
+        self.push_meta_eq(MetaKey::L4Proto, IPPROTO_TCP);
         self.exprs.push(Expr::Payload {
             dreg: Register::R0,
             base: PayloadBase::Transport,
@@ -1202,15 +1185,7 @@ impl Rule {
     /// Match UDP source port.
     pub fn match_udp_sport(mut self, port: u16) -> Self {
         use super::expr::Expr;
-        self.exprs.push(Expr::Meta {
-            dreg: Register::R0,
-            key: MetaKey::L4Proto,
-        });
-        self.exprs.push(Expr::Cmp {
-            sreg: Register::R0,
-            op: CmpOp::Eq,
-            data: vec![17u8], // IPPROTO_UDP
-        });
+        self.push_meta_eq(MetaKey::L4Proto, IPPROTO_UDP);
         self.exprs.push(Expr::Payload {
             dreg: Register::R0,
             base: PayloadBase::Transport,
@@ -1231,6 +1206,9 @@ impl Rule {
     /// time-exceeded=11, redirect=5.
     pub fn match_icmp_type(mut self, icmp_type: u8) -> Self {
         use super::expr::Expr;
+        // ICMP is IPv4-only; in an `inet` chain `nft` prepends the
+        // `meta nfproto ipv4` guard, same as the v4 address matchers.
+        self.push_nfproto_ipv4();
         self.push_meta_eq(MetaKey::L4Proto, IPPROTO_ICMP);
         // Load ICMP type (first byte of transport header)
         self.exprs.push(Expr::Payload {
@@ -1253,6 +1231,9 @@ impl Rule {
     /// neighbor-advertisement=136, router-solicitation=133, router-advertisement=134.
     pub fn match_icmpv6_type(mut self, icmp_type: u8) -> Self {
         use super::expr::Expr;
+        // ICMPv6 is IPv6-only; in an `inet` chain `nft` prepends the
+        // `meta nfproto ipv6` guard, same as the v6 address matchers.
+        self.push_nfproto_ipv6();
         self.push_meta_eq(MetaKey::L4Proto, IPPROTO_ICMPV6);
         self.exprs.push(Expr::Payload {
             dreg: Register::R0,
@@ -1962,6 +1943,25 @@ mod tests {
                 rule.exprs,
             );
         }
+    }
+
+    #[test]
+    fn icmp_matchers_prepend_nfproto_guard() {
+        // ICMP/ICMPv6 are L3-version-specific, so the matchers open with
+        // the nfproto guard (Meta@0, Eq Cmp@1) ahead of the l4proto
+        // meta+cmp pair — the same `nft`-in-inet behavior as addr matchers.
+        let v4 = Rule::new("f", "input").match_icmp_type(8);
+        assert!(
+            has_nfproto_guard(&v4, NFPROTO_IPV4),
+            "match_icmp_type must open with meta nfproto == ipv4: {:?}",
+            v4.exprs,
+        );
+        let v6 = Rule::new("f", "input").match_icmpv6_type(128);
+        assert!(
+            has_nfproto_guard(&v6, NFPROTO_IPV6),
+            "match_icmpv6_type must open with meta nfproto == ipv6: {:?}",
+            v6.exprs,
+        );
     }
 
     #[test]

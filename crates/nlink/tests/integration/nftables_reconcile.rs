@@ -813,6 +813,41 @@ async fn inet_addr_matches_round_trip() -> nlink::Result<()> {
     .await
 }
 
+/// ICMP/ICMPv6 type matches in an `inet` chain must round-trip. Both
+/// protocols are L3-version-specific, so `nft` prepends a `meta nfproto`
+/// guard ahead of the `meta l4proto` match — the same asymmetry as the
+/// address matchers, on a different matcher family.
+#[tokio::test]
+async fn inet_icmp_type_matches_round_trip() -> nlink::Result<()> {
+    require_root!();
+    nlink::require_modules!("nf_tables");
+
+    with_timeout(async {
+        let ns = TestNamespace::new("inet-icmp-rt")?;
+        let nft = nft_in_ns(&ns)?;
+
+        let cfg = NftablesConfig::new().table("filter_icmp", Family::Inet, |t| {
+            t.chain("input", |c| {
+                c.hook(Hook::Input).priority(Priority::Filter)
+            })
+            .rule_keyed("input", "icmp", |r| r.match_icmp_type(8).accept())
+            .rule_keyed("input", "icmpv6", |r| r.match_icmpv6_type(128).accept())
+        });
+
+        cfg.diff(&nft).await?.apply(&nft).await?;
+
+        let again = cfg.diff(&nft).await?;
+        assert!(
+            again.is_empty(),
+            "kernel inserts a meta nfproto guard before inet icmp matches; \
+             nlink must render it too — re-diff was non-empty: {again}"
+        );
+
+        Ok(())
+    })
+    .await
+}
+
 /// Addr-only SNAT (no port) must round-trip — guards the `NFTA_NAT_FLAGS`
 /// derivation for the `MAP_IPS`-only case (flags=1). The snat/dnat
 /// round-trip tests cover the addr+port case (flags=3).

@@ -6,25 +6,23 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
-- **Fix permanent phantom diffs in `NftablesConfig::diff` for address,
-  masked-prefix, and NAT rules.** The diff byte-compares nlink's
-  lowered expressions against what the kernel stores and echoes on
-  dump; three cases lowered to less than the kernel's canonical form,
-  so a reapply re-emitted the rule on every reconcile. Now fixed:
-  - The IPv4/IPv6 address matchers (`match_{s,d}addr_{v4,v6}` and their
-    `_not` variants) now prepend the `meta nfproto == ip{v4,v6}` L3
-    guard `nft` itself emits. Besides the diff, its absence made the
-    bare `Payload(Network)` load ambiguous in an `inet` chain (matched
-    the wrong L3 protocol) and unrecoverable by `nft list ruleset`
-    (printed raw `@nh,...`).
-  - The `bitwise` writer now emits `NFTA_BITWISE_OP` (affects every
-    prefix-masked match, `/24`, `/64`, …) and the `nat` writer emits
-    `NFTA_NAT_REG_{ADDR,PROTO}_MAX` and `NFTA_NAT_FLAGS` (affects every
-    `snat`/`dnat`) — all attributes the kernel fills in and echoes.
+- **Fix permanent phantom diffs in `NftablesConfig::diff`.** The diff
+  byte-compares nlink's lowered expressions against what the kernel
+  echoes on dump; several matchers lowered to less than the kernel's
+  canonical form, so a reapply re-emitted the rule on every reconcile.
+  - L3-version-specific matchers now prepend the `meta nfproto ==
+    ip{v4,v6}` guard `nft` itself emits in an `inet` chain: the
+    address matchers (`match_{s,d}addr_{v4,v6}` + `_not`) and the ICMP
+    type matchers (`match_icmp_type`/`match_icmpv6_type`). Its absence
+    also made the load ambiguous in an `inet` chain and unrecoverable
+    by `nft list ruleset`.
+  - The `bitwise` writer now emits `NFTA_BITWISE_OP` (every
+    prefix-masked match) and the `nat` writer emits
+    `NFTA_NAT_REG_{ADDR,PROTO}_MAX` + `NFTA_NAT_FLAGS` (every
+    `snat`/`dnat`) — attributes the kernel fills in and echoes. Latent
+    since the original nftables support (0.10.0).
 
-  The NAT/bitwise gap was latent since the original nftables support
-  (0.10.0). The CI integration job now modprobes `nft_nat` so the NAT
-  round-trip tests run for real instead of skipping.
+- **Modprobe `nft_nat` in CI** so NAT round-trip tests run instead of skipping.
 
 ## [0.19.0] - 2026-05-31
 
