@@ -80,6 +80,10 @@ jobs:
             # nftables (Plan 150 flowtable + Plan 157 declarative apply)
             nf_tables
             nf_flow_table
+            # nftables NAT — without this the snat/dnat round-trip
+            # tests silently skip via `require_modules!("nft_nat")`
+            nft_nat
+            nf_nat
             # tc qdiscs
             sch_htb sch_netem sch_tbf sch_sfq sch_prio
             sch_fq_codel sch_ingress sch_clsact sch_drr sch_qfq

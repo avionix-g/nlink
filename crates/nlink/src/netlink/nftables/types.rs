@@ -308,6 +308,18 @@ pub enum Register {
     R3 = 4,
 }
 
+/// `meta nfproto` L3-protocol values, used as the guard prepended to
+/// the address matchers (see [`Rule::match_saddr_v4`] / `_v6`).
+pub(crate) const NFPROTO_IPV4: u8 = 2;
+pub(crate) const NFPROTO_IPV6: u8 = 10;
+
+/// `meta l4proto` values, used as the guard prepended by the
+/// transport-layer matchers.
+const IPPROTO_ICMP: u8 = 1;
+const IPPROTO_TCP: u8 = 6;
+const IPPROTO_UDP: u8 = 17;
+const IPPROTO_ICMPV6: u8 = 58;
+
 /// Comparison operator.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
@@ -757,15 +769,7 @@ impl Rule {
     /// Generates: meta(L4PROTO) + cmp(==TCP) + payload(dport) + cmp(==port)
     pub fn match_tcp_dport(mut self, port: u16) -> Self {
         use super::expr::Expr;
-        self.exprs.push(Expr::Meta {
-            dreg: Register::R0,
-            key: MetaKey::L4Proto,
-        });
-        self.exprs.push(Expr::Cmp {
-            sreg: Register::R0,
-            op: CmpOp::Eq,
-            data: vec![6u8], // IPPROTO_TCP
-        });
+        self.push_meta_eq(MetaKey::L4Proto, IPPROTO_TCP);
         self.exprs.push(Expr::Payload {
             dreg: Register::R0,
             base: PayloadBase::Transport,
@@ -783,15 +787,7 @@ impl Rule {
     /// Match UDP destination port.
     pub fn match_udp_dport(mut self, port: u16) -> Self {
         use super::expr::Expr;
-        self.exprs.push(Expr::Meta {
-            dreg: Register::R0,
-            key: MetaKey::L4Proto,
-        });
-        self.exprs.push(Expr::Cmp {
-            sreg: Register::R0,
-            op: CmpOp::Eq,
-            data: vec![17u8], // IPPROTO_UDP
-        });
+        self.push_meta_eq(MetaKey::L4Proto, IPPROTO_UDP);
         self.exprs.push(Expr::Payload {
             dreg: Register::R0,
             base: PayloadBase::Transport,
@@ -850,11 +846,38 @@ impl Rule {
         });
     }
 
+    /// Push `meta <key> == <value>` (a 1-byte metadata load + Eq compare
+    /// in `R0`) — the shared shape of the nfproto/l4proto matcher guards.
+    fn push_meta_eq(&mut self, key: MetaKey, value: u8) {
+        self.exprs.push(Expr::Meta {
+            dreg: Register::R0,
+            key,
+        });
+        self.exprs.push(Expr::Cmp {
+            sreg: Register::R0,
+            op: CmpOp::Eq,
+            data: vec![value],
+        });
+    }
+
+    /// Prepend the `meta nfproto == ip{v4,v6}` L3 guard `nft` inserts
+    /// before every `ip`/`ip6 saddr/daddr` match. Without it the address
+    /// load is ambiguous in an `inet` chain, and the declarative diff
+    /// phantom-diffs (the kernel stores the guard; nlink must too).
+    fn push_nfproto_ipv6(&mut self) {
+        self.push_meta_eq(MetaKey::NfProto, NFPROTO_IPV6);
+    }
+
+    fn push_nfproto_ipv4(&mut self) {
+        self.push_meta_eq(MetaKey::NfProto, NFPROTO_IPV4);
+    }
+
     /// Match source IPv4 address with prefix length. Operates on the
     /// IP header (`PayloadBase::Network`), so use only on chains that
     /// see IPv4 traffic (`ip`/`inet`/`netdev` family).
     pub fn match_saddr_v4(mut self, addr: Ipv4Addr, prefix: u8) -> Self {
         // Source IP at offset 12 in the IPv4 header.
+        self.push_nfproto_ipv4();
         self.push_addr_match(&addr.octets(), 12, prefix, 32, CmpOp::Eq);
         self
     }
@@ -864,6 +887,7 @@ impl Rule {
     /// (`ip6`/`inet`/`netdev` family).
     pub fn match_saddr_v6(mut self, addr: Ipv6Addr, prefix: u8) -> Self {
         // Source IP at offset 8 in the IPv6 header.
+        self.push_nfproto_ipv6();
         self.push_addr_match(&addr.octets(), 8, prefix, 128, CmpOp::Eq);
         self
     }
@@ -872,6 +896,7 @@ impl Rule {
     /// the IP header, so use only on chains that see IPv4 traffic.
     pub fn match_daddr_v4(mut self, addr: Ipv4Addr, prefix: u8) -> Self {
         // Destination IP at offset 16 in the IPv4 header.
+        self.push_nfproto_ipv4();
         self.push_addr_match(&addr.octets(), 16, prefix, 32, CmpOp::Eq);
         self
     }
@@ -880,6 +905,7 @@ impl Rule {
     /// the IP header, so use only on chains that see IPv6 traffic.
     pub fn match_daddr_v6(mut self, addr: Ipv6Addr, prefix: u8) -> Self {
         // Destination IP at offset 24 in the IPv6 header.
+        self.push_nfproto_ipv6();
         self.push_addr_match(&addr.octets(), 24, prefix, 128, CmpOp::Eq);
         self
     }
@@ -1134,31 +1160,14 @@ impl Rule {
     /// rule.match_l4proto(6)
     /// ```
     pub fn match_l4proto(mut self, proto: u8) -> Self {
-        use super::expr::Expr;
-        self.exprs.push(Expr::Meta {
-            dreg: Register::R0,
-            key: MetaKey::L4Proto,
-        });
-        self.exprs.push(Expr::Cmp {
-            sreg: Register::R0,
-            op: CmpOp::Eq,
-            data: vec![proto],
-        });
+        self.push_meta_eq(MetaKey::L4Proto, proto);
         self
     }
 
     /// Match TCP source port.
     pub fn match_tcp_sport(mut self, port: u16) -> Self {
         use super::expr::Expr;
-        self.exprs.push(Expr::Meta {
-            dreg: Register::R0,
-            key: MetaKey::L4Proto,
-        });
-        self.exprs.push(Expr::Cmp {
-            sreg: Register::R0,
-            op: CmpOp::Eq,
-            data: vec![6u8], // IPPROTO_TCP
-        });
+        self.push_meta_eq(MetaKey::L4Proto, IPPROTO_TCP);
         self.exprs.push(Expr::Payload {
             dreg: Register::R0,
             base: PayloadBase::Transport,
@@ -1176,15 +1185,7 @@ impl Rule {
     /// Match UDP source port.
     pub fn match_udp_sport(mut self, port: u16) -> Self {
         use super::expr::Expr;
-        self.exprs.push(Expr::Meta {
-            dreg: Register::R0,
-            key: MetaKey::L4Proto,
-        });
-        self.exprs.push(Expr::Cmp {
-            sreg: Register::R0,
-            op: CmpOp::Eq,
-            data: vec![17u8], // IPPROTO_UDP
-        });
+        self.push_meta_eq(MetaKey::L4Proto, IPPROTO_UDP);
         self.exprs.push(Expr::Payload {
             dreg: Register::R0,
             base: PayloadBase::Transport,
@@ -1205,16 +1206,10 @@ impl Rule {
     /// time-exceeded=11, redirect=5.
     pub fn match_icmp_type(mut self, icmp_type: u8) -> Self {
         use super::expr::Expr;
-        // First ensure it's ICMP
-        self.exprs.push(Expr::Meta {
-            dreg: Register::R0,
-            key: MetaKey::L4Proto,
-        });
-        self.exprs.push(Expr::Cmp {
-            sreg: Register::R0,
-            op: CmpOp::Eq,
-            data: vec![1u8], // IPPROTO_ICMP
-        });
+        // ICMP is IPv4-only; in an `inet` chain `nft` prepends the
+        // `meta nfproto ipv4` guard, same as the v4 address matchers.
+        self.push_nfproto_ipv4();
+        self.push_meta_eq(MetaKey::L4Proto, IPPROTO_ICMP);
         // Load ICMP type (first byte of transport header)
         self.exprs.push(Expr::Payload {
             dreg: Register::R0,
@@ -1236,15 +1231,10 @@ impl Rule {
     /// neighbor-advertisement=136, router-solicitation=133, router-advertisement=134.
     pub fn match_icmpv6_type(mut self, icmp_type: u8) -> Self {
         use super::expr::Expr;
-        self.exprs.push(Expr::Meta {
-            dreg: Register::R0,
-            key: MetaKey::L4Proto,
-        });
-        self.exprs.push(Expr::Cmp {
-            sreg: Register::R0,
-            op: CmpOp::Eq,
-            data: vec![58u8], // IPPROTO_ICMPV6
-        });
+        // ICMPv6 is IPv6-only; in an `inet` chain `nft` prepends the
+        // `meta nfproto ipv6` guard, same as the v6 address matchers.
+        self.push_nfproto_ipv6();
+        self.push_meta_eq(MetaKey::L4Proto, IPPROTO_ICMPV6);
         self.exprs.push(Expr::Payload {
             dreg: Register::R0,
             base: PayloadBase::Transport,
@@ -1263,6 +1253,7 @@ impl Rule {
     /// For prefixes shorter than 32, "not equal" means "outside the
     /// subnet" — the load is masked before comparison.
     pub fn match_saddr_v4_not(mut self, addr: Ipv4Addr, prefix: u8) -> Self {
+        self.push_nfproto_ipv4();
         self.push_addr_match(&addr.octets(), 12, prefix, 32, CmpOp::Neq);
         self
     }
@@ -1271,6 +1262,7 @@ impl Rule {
     /// For prefixes shorter than 128, "not equal" means "outside the
     /// subnet" — the load is masked before comparison.
     pub fn match_saddr_v6_not(mut self, addr: Ipv6Addr, prefix: u8) -> Self {
+        self.push_nfproto_ipv6();
         self.push_addr_match(&addr.octets(), 8, prefix, 128, CmpOp::Neq);
         self
     }
@@ -1279,6 +1271,7 @@ impl Rule {
     /// For prefixes shorter than 32, "not equal" means "outside the
     /// subnet" — the load is masked before comparison.
     pub fn match_daddr_v4_not(mut self, addr: Ipv4Addr, prefix: u8) -> Self {
+        self.push_nfproto_ipv4();
         self.push_addr_match(&addr.octets(), 16, prefix, 32, CmpOp::Neq);
         self
     }
@@ -1287,6 +1280,7 @@ impl Rule {
     /// For prefixes shorter than 128, "not equal" means "outside the
     /// subnet" — the load is masked before comparison.
     pub fn match_daddr_v6_not(mut self, addr: Ipv6Addr, prefix: u8) -> Self {
+        self.push_nfproto_ipv6();
         self.push_addr_match(&addr.octets(), 24, prefix, 128, CmpOp::Neq);
         self
     }
@@ -1294,15 +1288,7 @@ impl Rule {
     /// Match TCP destination port not equal to the given port.
     pub fn match_tcp_dport_not(mut self, port: u16) -> Self {
         use super::expr::Expr;
-        self.exprs.push(Expr::Meta {
-            dreg: Register::R0,
-            key: MetaKey::L4Proto,
-        });
-        self.exprs.push(Expr::Cmp {
-            sreg: Register::R0,
-            op: CmpOp::Eq,
-            data: vec![6u8],
-        });
+        self.push_meta_eq(MetaKey::L4Proto, IPPROTO_TCP);
         self.exprs.push(Expr::Payload {
             dreg: Register::R0,
             base: PayloadBase::Transport,
@@ -1320,15 +1306,7 @@ impl Rule {
     /// Match UDP destination port not equal to the given port.
     pub fn match_udp_dport_not(mut self, port: u16) -> Self {
         use super::expr::Expr;
-        self.exprs.push(Expr::Meta {
-            dreg: Register::R0,
-            key: MetaKey::L4Proto,
-        });
-        self.exprs.push(Expr::Cmp {
-            sreg: Register::R0,
-            op: CmpOp::Eq,
-            data: vec![17u8],
-        });
+        self.push_meta_eq(MetaKey::L4Proto, IPPROTO_UDP);
         self.exprs.push(Expr::Payload {
             dreg: Register::R0,
             base: PayloadBase::Transport,
@@ -1816,14 +1794,42 @@ mod tests {
             .collect()
     }
 
+    /// `Cmp` exprs with the leading nfproto guard stripped by position,
+    /// so address-match assertions see only the address comparison.
     fn cmp_exprs(rule: &Rule) -> Vec<(CmpOp, Vec<u8>)> {
-        rule.exprs
+        strip_nfproto_guard(&rule.exprs)
             .iter()
             .filter_map(|e| match e {
                 Expr::Cmp { op, data, .. } => Some((*op, data.clone())),
                 _ => None,
             })
             .collect()
+    }
+
+    /// The expression slice with a leading `Meta{NfProto} + Cmp{Eq}`
+    /// guard pair removed, if present.
+    fn strip_nfproto_guard(exprs: &[Expr]) -> &[Expr] {
+        match exprs {
+            [
+                Expr::Meta { key: MetaKey::NfProto, .. },
+                Expr::Cmp { op: CmpOp::Eq, .. },
+                rest @ ..,
+            ] => rest,
+            _ => exprs,
+        }
+    }
+
+    /// True if `rule` opens with `meta nfproto == <proto>` (Meta at
+    /// index 0, its Eq Cmp at index 1).
+    fn has_nfproto_guard(rule: &Rule, proto: u8) -> bool {
+        matches!(
+            rule.exprs.as_slice(),
+            [
+                Expr::Meta { key: MetaKey::NfProto, .. },
+                Expr::Cmp { op: CmpOp::Eq, data, .. },
+                ..,
+            ] if data.as_slice() == [proto]
+        )
     }
 
     fn bitwise_exprs(rule: &Rule) -> Vec<Vec<u8>> {
@@ -1907,6 +1913,55 @@ mod tests {
         assert_eq!(payloads, vec![(PayloadBase::Network, 24, 16)]);
         assert_eq!(cmps.len(), 1);
         assert_eq!(cmps[0].0, CmpOp::Neq);
+    }
+
+    #[test]
+    fn addr_matchers_prepend_nfproto_guard() {
+        // Every address matcher opens with the two-expr nfproto guard
+        // (Meta@0, Eq Cmp@1), with the address Payload immediately after.
+        let v4: Ipv4Addr = "10.0.0.1".parse().unwrap();
+        let v6: Ipv6Addr = "2001:db8::1".parse().unwrap();
+        let cases = [
+            (Rule::new("f", "input").match_saddr_v4(v4, 24), NFPROTO_IPV4),
+            (Rule::new("f", "output").match_daddr_v4(v4, 24), NFPROTO_IPV4),
+            (Rule::new("f", "input").match_saddr_v4_not(v4, 24), NFPROTO_IPV4),
+            (Rule::new("f", "output").match_daddr_v4_not(v4, 24), NFPROTO_IPV4),
+            (Rule::new("f", "input").match_saddr_v6(v6, 64), NFPROTO_IPV6),
+            (Rule::new("f", "output").match_daddr_v6(v6, 64), NFPROTO_IPV6),
+            (Rule::new("f", "input").match_saddr_v6_not(v6, 64), NFPROTO_IPV6),
+            (Rule::new("f", "output").match_daddr_v6_not(v6, 64), NFPROTO_IPV6),
+        ];
+        for (rule, proto) in cases {
+            assert!(
+                has_nfproto_guard(&rule, proto),
+                "matcher must open with meta nfproto == {proto}: {:?}",
+                rule.exprs,
+            );
+            assert!(
+                matches!(rule.exprs.get(2), Some(Expr::Payload { .. })),
+                "address payload must immediately follow the 2-expr guard: {:?}",
+                rule.exprs,
+            );
+        }
+    }
+
+    #[test]
+    fn icmp_matchers_prepend_nfproto_guard() {
+        // ICMP/ICMPv6 are L3-version-specific, so the matchers open with
+        // the nfproto guard (Meta@0, Eq Cmp@1) ahead of the l4proto
+        // meta+cmp pair — the same `nft`-in-inet behavior as addr matchers.
+        let v4 = Rule::new("f", "input").match_icmp_type(8);
+        assert!(
+            has_nfproto_guard(&v4, NFPROTO_IPV4),
+            "match_icmp_type must open with meta nfproto == ipv4: {:?}",
+            v4.exprs,
+        );
+        let v6 = Rule::new("f", "input").match_icmpv6_type(128);
+        assert!(
+            has_nfproto_guard(&v6, NFPROTO_IPV6),
+            "match_icmpv6_type must open with meta nfproto == ipv6: {:?}",
+            v6.exprs,
+        );
     }
 
     #[test]

@@ -160,12 +160,21 @@ fn write_expr(builder: &mut MessageBuilder, expr: &Expr) {
                 nat.family
             );
             builder.append_attr_u32_be(NFTA_NAT_FAMILY, nat.family as u32);
+            // Emit MAX (= MIN for a single-value NAT) and the derived
+            // flags explicitly: the kernel fills them in and echoes them
+            // on dump, so omitting them breaks the round-trip diff.
+            let mut flags = 0u32;
             if nat.addr.reg_in_use() {
                 builder.append_attr_u32_be(NFTA_NAT_REG_ADDR_MIN, Register::R0 as u32);
+                builder.append_attr_u32_be(NFTA_NAT_REG_ADDR_MAX, Register::R0 as u32);
+                flags |= NF_NAT_RANGE_MAP_IPS;
             }
             if nat.port.is_some() {
                 builder.append_attr_u32_be(NFTA_NAT_REG_PROTO_MIN, Register::R1 as u32);
+                builder.append_attr_u32_be(NFTA_NAT_REG_PROTO_MAX, Register::R1 as u32);
+                flags |= NF_NAT_RANGE_PROTO_SPECIFIED;
             }
+            builder.append_attr_u32_be(NFTA_NAT_FLAGS, flags);
             builder.nest_end(data);
         }
         Expr::Redirect { port } => {
@@ -213,6 +222,9 @@ fn write_expr(builder: &mut MessageBuilder, expr: &Expr) {
             builder.append_attr_u32_be(NFTA_BITWISE_SREG, *sreg as u32);
             builder.append_attr_u32_be(NFTA_BITWISE_DREG, *dreg as u32);
             builder.append_attr_u32_be(NFTA_BITWISE_LEN, *len);
+            // Kernel defaults this to BOOL and echoes it on dump; emit
+            // it so the round-trip diff stays byte-clean.
+            builder.append_attr_u32_be(NFTA_BITWISE_OP, NFT_BITWISE_BOOL);
             let mask_nest = builder.nest_start(NFTA_BITWISE_MASK | 0x8000);
             builder.append_attr(NFTA_DATA_VALUE, mask);
             builder.nest_end(mask_nest);
