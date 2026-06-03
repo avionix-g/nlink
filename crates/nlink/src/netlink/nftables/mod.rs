@@ -224,6 +224,9 @@ pub const NFTA_BITWISE_DREG: u16 = 2;
 pub const NFTA_BITWISE_LEN: u16 = 3;
 pub const NFTA_BITWISE_MASK: u16 = 4;
 pub const NFTA_BITWISE_XOR: u16 = 5;
+pub const NFTA_BITWISE_OP: u16 = 6;
+/// `NFT_BITWISE_BOOL` — the mask/xor boolean op (`NFTA_BITWISE_OP`).
+pub const NFT_BITWISE_BOOL: u32 = 0;
 
 // Conntrack
 pub const NFTA_CT_DREG: u16 = 1;
@@ -243,6 +246,10 @@ pub const NFTA_NAT_REG_ADDR_MAX: u16 = 4;
 pub const NFTA_NAT_REG_PROTO_MIN: u16 = 5;
 pub const NFTA_NAT_REG_PROTO_MAX: u16 = 6;
 pub const NFTA_NAT_FLAGS: u16 = 7;
+/// `NF_NAT_RANGE_MAP_IPS` — `NFTA_NAT_FLAGS` bit: NAT rewrites the address.
+pub const NF_NAT_RANGE_MAP_IPS: u32 = 1;
+/// `NF_NAT_RANGE_PROTO_SPECIFIED` — `NFTA_NAT_FLAGS` bit: NAT rewrites the port.
+pub const NF_NAT_RANGE_PROTO_SPECIFIED: u32 = 2;
 
 // Log
 pub const NFTA_LOG_PREFIX: u16 = 1;

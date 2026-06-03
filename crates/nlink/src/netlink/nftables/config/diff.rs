@@ -729,6 +729,80 @@ mod tests {
         assert!(lower_to_expression_bytes(&r).is_empty());
     }
 
+    /// Walk `bytes` as a TLV stream → `(type_without_hint_bits, payload)`.
+    fn walk(bytes: &[u8]) -> Vec<(u16, &[u8])> {
+        let mut out = Vec::new();
+        let mut pos = 0;
+        while pos + 4 <= bytes.len() {
+            let len = u16::from_le_bytes([bytes[pos], bytes[pos + 1]]) as usize;
+            let ty = u16::from_le_bytes([bytes[pos + 2], bytes[pos + 3]]) & 0x3fff;
+            if len < 4 || pos + len > bytes.len() {
+                break;
+            }
+            out.push((ty, &bytes[pos + 4..pos + len]));
+            pos += (len + 3) & !3;
+        }
+        out
+    }
+
+    /// True if the lowered expression list contains an expression named
+    /// `expr_name` whose `NFTA_EXPR_DATA` carries inner attribute `attr`.
+    fn expr_has_attr(body: &[u8], expr_name: &str, attr: u16) -> bool {
+        // body = list of NFTA_LIST_ELEM (type 1), each wrapping one expr.
+        walk(body).into_iter().any(|(_, elem)| {
+            let mut name = None;
+            let mut data = None;
+            for (t, p) in walk(elem) {
+                match t {
+                    1 => name = Some(p.split(|&b| b == 0).next().unwrap_or(p)),
+                    2 => data = Some(p),
+                    _ => {}
+                }
+            }
+            name == Some(expr_name.as_bytes())
+                && data.is_some_and(|d| walk(d).iter().any(|(t, _)| *t == attr))
+        })
+    }
+
+    #[test]
+    fn masked_match_lowers_bitwise_op() {
+        use super::super::super::NFTA_BITWISE_OP;
+        use super::super::super::types::Rule;
+        use std::net::Ipv4Addr;
+        let v4: Ipv4Addr = "10.1.2.3".parse().unwrap();
+        let masked = lower_to_expression_bytes(
+            &Rule::new("f", "input").match_saddr_v4(v4, 24).accept(),
+        );
+        assert!(
+            expr_has_attr(&masked, "bitwise", NFTA_BITWISE_OP),
+            "masked match must emit NFTA_BITWISE_OP"
+        );
+        // Exact match has no bitwise expr at all.
+        let exact = lower_to_expression_bytes(
+            &Rule::new("f", "input").match_saddr_v4(v4, 32).accept(),
+        );
+        assert!(
+            !expr_has_attr(&exact, "bitwise", NFTA_BITWISE_OP),
+            "exact match should emit no bitwise expr"
+        );
+    }
+
+    #[test]
+    fn nat_lowers_max_regs_and_flags() {
+        use super::super::super::{
+            NFTA_NAT_FLAGS, NFTA_NAT_REG_ADDR_MAX, NFTA_NAT_REG_PROTO_MAX,
+        };
+        use super::super::super::types::Rule;
+        use std::net::Ipv6Addr;
+        let target: Ipv6Addr = "fd30::1".parse().unwrap();
+        let body = lower_to_expression_bytes(
+            &Rule::new("n", "post").snat_v6(target, Some(8080)),
+        );
+        assert!(expr_has_attr(&body, "nat", NFTA_NAT_REG_ADDR_MAX));
+        assert!(expr_has_attr(&body, "nat", NFTA_NAT_REG_PROTO_MAX));
+        assert!(expr_has_attr(&body, "nat", NFTA_NAT_FLAGS));
+    }
+
     #[test]
     fn summary_renders_rules_to_replace() {
         use super::super::super::types::{Family, Rule};
