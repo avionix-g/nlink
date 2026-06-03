@@ -780,23 +780,12 @@ async fn snat_v6_rule_round_trips() -> nlink::Result<()> {
 ///
 /// This is the flavor-C "golden" assertion: the kernel is the golden
 /// value, live — an empty re-diff *is* byte-equality. The exact-match
-/// legs (`/32`, `/128`) prove the nfproto-guard fix in this commit; the
-/// v4 legs specifically guard the asymmetry where the v6 matchers had
-/// the guard but the v4 matchers did not.
-///
-/// IGNORED for this commit: the `/24` and `/64` prefix legs exercise
-/// the masked (`Bitwise`) lowering path, which has a *separate*
-/// pre-existing round-trip divergence on `master` (the same class that
-/// makes `snat_v6_rule_round_trips` fail as real root — masked by CI
-/// never modprobing `nft_nat`, so neither has ever run for real in CI).
-/// The immediate follow-up commit fixes that path and removes this
-/// `#[ignore]`. Confirm the exact-match legs pass today by running with
-/// `--ignored`:
-///   sudo ./target/debug/deps/integration-* --ignored \
-///       --test-threads=1 inet_addr_matches_round_trip
+/// legs (`/32`, `/128`) prove the nfproto-guard fix; the v4 legs guard
+/// the asymmetry where the v6 matchers had the guard but the v4 matchers
+/// did not. The `/24` and `/64` prefix legs additionally exercise the
+/// masked (`Bitwise`) lowering path, which the kernel canonicalizes with
+/// an `NFTA_BITWISE_OP` attribute nlink now emits.
 #[tokio::test]
-#[ignore = "blocked on pre-existing masked-prefix/NAT round-trip bug; \
-            un-ignored by the follow-up fix commit"]
 async fn inet_addr_matches_round_trip() -> nlink::Result<()> {
     require_root!();
     nlink::require_modules!("nf_tables");
@@ -828,6 +817,44 @@ async fn inet_addr_matches_round_trip() -> nlink::Result<()> {
              nlink must render it too — re-diff was non-empty: {again}"
         );
 
+        Ok(())
+    })
+    .await
+}
+
+/// Addr-only SNAT (no port) must round-trip. Guards the
+/// `NFTA_NAT_FLAGS` derivation: with an address but no port the kernel
+/// stores `NF_NAT_RANGE_MAP_IPS` only (flags=1), so nlink must emit
+/// exactly that. The `snat_v6_rule_round_trips` / `dnat_v6_rule_round_trips`
+/// tests cover the addr+port case (flags=3); this covers the addr-only
+/// leg the formula must also get right.
+#[tokio::test]
+async fn snat_v6_addr_only_round_trips() -> nlink::Result<()> {
+    require_root!();
+    nlink::require_modules!("nf_tables", "nft_nat");
+    with_timeout(async {
+        use std::net::Ipv6Addr;
+        let ns = TestNamespace::new("snat-v6-addr")?;
+        let nft = nft_in_ns(&ns)?;
+        let target: Ipv6Addr = "fd30::1".parse().unwrap();
+        let cfg = NftablesConfig::new().table("n", Family::Ip6, |t| {
+            t.chain("post", |c| {
+                c.hook(Hook::Postrouting)
+                    .priority(Priority::SrcNat)
+                    .chain_type(ChainType::Nat)
+            })
+            .rule_keyed("post", "snat", |r| {
+                r.match_saddr_v6("fd30::100".parse().unwrap(), 128)
+                    .snat_v6(target, None)
+            })
+        });
+        cfg.diff(&nft).await?.apply(&nft).await?;
+        let again = cfg.diff(&nft).await?;
+        assert!(
+            again.is_empty(),
+            "addr-only snat must round-trip (flags=MAP_IPS only); \
+             re-diff was non-empty: {again}"
+        );
         Ok(())
     })
     .await
