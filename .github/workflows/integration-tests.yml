@@ -80,6 +80,10 @@ jobs:
             # nftables (Plan 150 flowtable + Plan 157 declarative apply)
             nf_tables
             nf_flow_table
+            # nftables NAT — without this the snat/dnat round-trip
+            # tests silently skip via `require_modules!("nft_nat")`
+            nft_nat
+            nf_nat
             # tc qdiscs
             sch_htb sch_netem sch_tbf sch_sfq sch_prio
             sch_fq_codel sch_ingress sch_clsact sch_drr sch_qfq
@@ -98,6 +102,8 @@ jobs:
             xfrm_user xfrm4_tunnel xfrm6_tunnel
             # macsec (GENL family)
             macsec
+            # wireguard (GENL family — get_device private-key readback)
+            wireguard
           )
           for m in "${modules[@]}"; do
             modprobe "$m" 2>/dev/null && echo "loaded: $m" || echo "skip: $m (not available; tests will skip via require_module!)"

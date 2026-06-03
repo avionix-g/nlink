@@ -4,6 +4,39 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Make `Connection::<Wireguard>::get_device*` return the device
+  `private_key` for privileged callers.** The parse path is factored
+  through a shared `parse_key()` helper that also normalizes the
+  kernel's all-zeros sentinel (returned for a keyless device on a
+  privileged read) to `None` for both `private_key` and
+  `public_key`, matching the peer `preshared_key` arm. The `wg` bin
+  renders the real key when set instead of a hardcoded
+  `(hidden)`/`(none)`.
+
+- **Fix permanent phantom diffs in `NftablesConfig::diff`.** The diff
+  byte-compares nlink's lowered expressions against what the kernel
+  echoes on dump; several matchers lowered to less than the kernel's
+  canonical form, so a reapply re-emitted the rule on every reconcile.
+  - L3-version-specific matchers now prepend the `meta nfproto ==
+    ip{v4,v6}` guard `nft` itself emits in an `inet` chain: the
+    address matchers (`match_{s,d}addr_{v4,v6}` + `_not`) and the ICMP
+    type matchers (`match_icmp_type`/`match_icmpv6_type`). Its absence
+    also made the load ambiguous in an `inet` chain and unrecoverable
+    by `nft list ruleset`.
+  - The `bitwise` writer now emits `NFTA_BITWISE_OP` (every
+    prefix-masked match) and the `nat` writer emits
+    `NFTA_NAT_REG_{ADDR,PROTO}_MAX` + `NFTA_NAT_FLAGS` (every
+    `snat`/`dnat`) — attributes the kernel fills in and echoes. Latent
+    since the original nftables support (0.10.0).
+  - **One-time migration impact for `apply_reconcile` users**:
+    rulesets installed by nlink ≤ 0.19 will diff non-empty on the
+    first post-upgrade reconcile because the in-kernel form lacks
+    the new attributes. The diff converges after one apply.
+
+- **Modprobe `nft_nat` in CI** so NAT round-trip tests run instead of skipping.
+
 ## [0.19.0] - 2026-05-31
 
 ### Breaking changes

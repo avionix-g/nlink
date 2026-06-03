@@ -770,3 +770,115 @@ async fn snat_v6_rule_round_trips() -> nlink::Result<()> {
     })
     .await
 }
+
+/// Address matches in an `inet` chain must round-trip to an empty
+/// re-diff (an empty re-diff is byte-equality against the kernel's
+/// stored rule). Covers all four legs: v4/v6 × exact (`/32`, `/128`,
+/// the nfproto guard) and prefix (`/24`, `/64`, the masked `Bitwise`
+/// path); the v4 legs guard against the v4/v6 guard asymmetry.
+#[tokio::test]
+async fn inet_addr_matches_round_trip() -> nlink::Result<()> {
+    require_root!();
+    nlink::require_modules!("nf_tables");
+
+    with_timeout(async {
+        use std::net::{Ipv4Addr, Ipv6Addr};
+
+        let ns = TestNamespace::new("inet-addr-rt")?;
+        let nft = nft_in_ns(&ns)?;
+
+        let v4: Ipv4Addr = "10.1.2.3".parse().unwrap();
+        let v6: Ipv6Addr = "2001:db8::1".parse().unwrap();
+        let cfg = NftablesConfig::new().table("filter_addr", Family::Inet, |t| {
+            t.chain("input", |c| {
+                c.hook(Hook::Input).priority(Priority::Filter)
+            })
+            .rule_keyed("input", "v4-exact", |r| r.match_saddr_v4(v4, 32).accept())
+            .rule_keyed("input", "v4-prefix", |r| r.match_daddr_v4(v4, 24).accept())
+            .rule_keyed("input", "v6-exact", |r| r.match_saddr_v6(v6, 128).accept())
+            .rule_keyed("input", "v6-prefix", |r| r.match_daddr_v6(v6, 64).accept())
+        });
+
+        cfg.diff(&nft).await?.apply(&nft).await?;
+
+        let again = cfg.diff(&nft).await?;
+        assert!(
+            again.is_empty(),
+            "kernel inserts a meta nfproto guard before inet addr matches; \
+             nlink must render it too — re-diff was non-empty: {again}"
+        );
+
+        Ok(())
+    })
+    .await
+}
+
+/// ICMP/ICMPv6 type matches in an `inet` chain must round-trip. Both
+/// protocols are L3-version-specific, so `nft` prepends a `meta nfproto`
+/// guard ahead of the `meta l4proto` match — the same asymmetry as the
+/// address matchers, on a different matcher family.
+#[tokio::test]
+async fn inet_icmp_type_matches_round_trip() -> nlink::Result<()> {
+    require_root!();
+    nlink::require_modules!("nf_tables");
+
+    with_timeout(async {
+        let ns = TestNamespace::new("inet-icmp-rt")?;
+        let nft = nft_in_ns(&ns)?;
+
+        let cfg = NftablesConfig::new().table("filter_icmp", Family::Inet, |t| {
+            t.chain("input", |c| {
+                c.hook(Hook::Input).priority(Priority::Filter)
+            })
+            .rule_keyed("input", "icmp", |r| r.match_icmp_type(8).accept())
+            .rule_keyed("input", "icmpv6", |r| r.match_icmpv6_type(128).accept())
+        });
+
+        cfg.diff(&nft).await?.apply(&nft).await?;
+
+        let again = cfg.diff(&nft).await?;
+        assert!(
+            again.is_empty(),
+            "kernel inserts a meta nfproto guard before inet icmp matches; \
+             nlink must render it too — re-diff was non-empty: {again}"
+        );
+
+        Ok(())
+    })
+    .await
+}
+
+/// Addr-only SNAT (no port) must round-trip — guards the `NFTA_NAT_FLAGS`
+/// derivation for the `MAP_IPS`-only case (flags=1). The snat/dnat
+/// round-trip tests cover the addr+port case (flags=3).
+#[tokio::test]
+async fn snat_v6_addr_only_round_trips() -> nlink::Result<()> {
+    require_root!();
+    nlink::require_modules!("nf_tables", "nft_nat");
+    with_timeout(async {
+        use std::net::Ipv6Addr;
+        let ns = TestNamespace::new("snat-v6-addr")?;
+        let nft = nft_in_ns(&ns)?;
+        let target: Ipv6Addr = "fd30::1".parse().unwrap();
+        let cfg = NftablesConfig::new().table("n", Family::Ip6, |t| {
+            t.chain("post", |c| {
+                c.hook(Hook::Postrouting)
+                    .priority(Priority::SrcNat)
+                    .chain_type(ChainType::Nat)
+            })
+            .rule_keyed("post", "snat", |r| {
+                r.match_saddr_v6("fd30::100".parse().unwrap(), 128)
+                    .snat_v6(target, None)
+            })
+        });
+        cfg.diff(&nft).await?.apply(&nft).await?;
+        let again = cfg.diff(&nft).await?;
+        assert!(
+            again.is_empty(),
+            "addr-only snat must round-trip (flags=MAP_IPS only); \
+             re-diff was non-empty: {again}"
+        );
+        Ok(())
+    })
+    .await
+}
