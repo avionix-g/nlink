@@ -84,3 +84,18 @@ for the deprecation removals.
   consumers of the enum need to handle them or use `..` rest
   patterns.
 
+### Breaking changes (continued) — Plan 231 sibling sweep
+
+- **`BridgeVlanEntry`, `FdbEntry`, `MplsRoute`, `Nexthop`,
+  `NexthopGroupMember` fields demoted to `pub(crate)` + structs
+  gain `#[non_exhaustive]`.** Per-field accessor methods added
+  for each (`entry.ifindex()`, `route.label()`, `nh.gateway()`,
+  …). These were the four sibling parsed-result types the Plan
+  231 baseline flagged but only `RuleMessage` got the full
+  treatment in 0.20.1. Direct field-access in downstream code
+  must become accessor-call. The audit script extended in §A.5
+  now covers these 4 types in addition to the `*Message` family
+  in `messages/`. In-tree bins (`bridge`, `ip`) and examples
+  (`bridge_fdb`, `bridge_vlan`, `events_monitor`, `route_mpls`,
+  `route_nexthop`) updated through the sweep.
+

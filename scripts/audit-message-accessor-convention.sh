@@ -105,6 +105,70 @@ for file in $(find "$MESSAGES_DIR" -name '*.rs' -type f | sort); do
     audit_file "$file"
 done
 
+# 0.21 — sibling parsed-result types outside messages/ that follow
+# the same convention. These are constructed by parser code (not by
+# users), so they share the convention rationale: fields hidden,
+# struct non-exhaustive, accessors public.
+SIBLING_AUDIT_FILES=(
+    "crates/nlink/src/netlink/bridge_vlan.rs"
+    "crates/nlink/src/netlink/fdb.rs"
+    "crates/nlink/src/netlink/mpls.rs"
+    "crates/nlink/src/netlink/nexthop.rs"
+)
+SIBLING_TARGETS=(
+    "BridgeVlanEntry"
+    "FdbEntry"
+    "MplsRoute"
+    "Nexthop"
+)
+
+for idx in "${!SIBLING_AUDIT_FILES[@]}"; do
+    file="${SIBLING_AUDIT_FILES[$idx]}"
+    target="${SIBLING_TARGETS[$idx]}"
+    if [[ ! -f "$file" ]]; then
+        continue
+    fi
+    awk -v FILE="$file" -v OUT="$TMP_VIOLATIONS" -v TGT="$target" '
+        function emit(msg) {
+            print msg >> OUT
+        }
+        { history[NR] = $0 }
+        $0 ~ ("^[[:space:]]*pub struct " TGT "([^A-Za-z0-9_]|$)") {
+            non_exh = 0
+            for (j = 1; j <= 5 && (NR - j) >= 1; j++) {
+                if (history[NR - j] ~ /^[[:space:]]*#\[non_exhaustive\]/) {
+                    non_exh = 1
+                    break
+                }
+            }
+            if (!non_exh) {
+                emit("VIOLATION: " FILE ":" NR ": " TGT " missing #[non_exhaustive]")
+            }
+            depth = 0
+            for (i = 1; i <= length($0); i++) {
+                ch = substr($0, i, 1)
+                if (ch == "{") depth++
+                else if (ch == "}") depth--
+            }
+            in_struct = 1
+            next
+        }
+        in_struct {
+            if ($0 ~ /^[[:space:]]+pub [a-zA-Z_][a-zA-Z0-9_]*:/) {
+                emit("VIOLATION: " FILE ":" NR ": " TGT " has bare pub field: " $0)
+            }
+            for (i = 1; i <= length($0); i++) {
+                ch = substr($0, i, 1)
+                if (ch == "{") depth++
+                else if (ch == "}") depth--
+            }
+            if (depth <= 0) {
+                in_struct = 0
+            }
+        }
+    ' "$file"
+done
+
 if [[ -s "$TMP_VIOLATIONS" ]]; then
     cat "$TMP_VIOLATIONS" >&2
     violations="$(wc -l < "$TMP_VIOLATIONS")"
