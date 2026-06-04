@@ -349,7 +349,15 @@ impl NetlinkSocket {
     }
 
     /// Send a message.
+    ///
+    /// Plan 232 B19 — surface backpressure as
+    /// [`Error::Backpressure`] after [`SEND_WOULDBLOCK_LIMIT`]
+    /// back-to-back `WouldBlock` returns from the kernel. The 30 s
+    /// connection timeout (Plan 171) would eventually surface as
+    /// `Timeout`; surfacing backpressure sooner lets a caller back
+    /// off without waiting the full timeout window.
     pub async fn send(&self, msg: &[u8]) -> Result<()> {
+        let mut would_block_count: u32 = 0;
         loop {
             let mut guard = self.fd.ready(Interest::WRITABLE).await?;
 
@@ -358,7 +366,15 @@ impl NetlinkSocket {
                     result?;
                     return Ok(());
                 }
-                Err(_would_block) => continue,
+                Err(_would_block) => {
+                    would_block_count += 1;
+                    if would_block_count >= SEND_WOULDBLOCK_LIMIT {
+                        return Err(Error::Backpressure {
+                            send_buffer_full: true,
+                        });
+                    }
+                    continue;
+                }
             }
         }
     }
@@ -448,6 +464,16 @@ impl NetlinkSocket {
         }
     }
 }
+
+/// Plan 232 B19 — back-to-back `WouldBlock` returns from `send`
+/// that exceed this threshold surface as
+/// [`Error::Backpressure`]. The kernel send buffer is full and
+/// retrying immediately is futile.
+///
+/// 32 matches the historic `NL_BATCH_SIZE` heuristic. The full
+/// 30 s connection timeout (Plan 171) is still in place as an
+/// upper bound; this lets callers react faster.
+pub(crate) const SEND_WOULDBLOCK_LIMIT: u32 = 32;
 
 /// Initial recv buffer capacity for [`NetlinkSocket::recv_msg`]
 /// (Plan 224). 32 KiB matches the historic single-frame cap; the
@@ -857,6 +883,22 @@ mod recv_msg_truncate_tests {
         assert!(next >= received);
         assert!(next <= RECV_MAX_CAPACITY);
         assert_eq!(next % 4096, 0);
+    }
+
+    #[test]
+    fn b19_backpressure_predicate_and_constant() {
+        // Plan 232 B19 — the SEND_WOULDBLOCK_LIMIT constant is the
+        // threshold past which back-to-back WouldBlocks surface
+        // as Backpressure instead of looping into the 30s
+        // connection timeout. Verify the constant is sane.
+        assert_eq!(SEND_WOULDBLOCK_LIMIT, 32);
+
+        let err = Error::Backpressure {
+            send_buffer_full: true,
+        };
+        assert!(err.is_backpressure());
+        // Other errors must NOT match.
+        assert!(!Error::Timeout.is_backpressure());
     }
 
     #[test]

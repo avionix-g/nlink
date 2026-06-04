@@ -114,6 +114,23 @@ pub enum Error {
         buffer_size: usize,
     },
 
+    /// Kernel send buffer is full and back-to-back `WouldBlock`
+    /// returns from `send` have exceeded the backpressure
+    /// threshold. The 30 s connection timeout (Plan 171) would
+    /// eventually surface as `Timeout`, but `Backpressure` lets
+    /// the caller react faster.
+    ///
+    /// Added in 0.20.1 (Plan 232 — closes B19).
+    #[error(
+        "netlink send: kernel send buffer full ({send_buffer_full}); \
+         try again later or back off"
+    )]
+    Backpressure {
+        /// True when caused by send-buffer-full back-to-back
+        /// WouldBlock returns from the kernel.
+        send_buffer_full: bool,
+    },
+
     /// Invalid message format.
     #[error("invalid message: {0}")]
     InvalidMessage(String),
@@ -722,6 +739,15 @@ impl Error {
     /// Added in 0.20.1 (Plan 224 — closes B4).
     pub fn is_truncated(&self) -> bool {
         matches!(self, Self::FrameTruncated { .. })
+    }
+
+    /// Check if this is an [`Error::Backpressure`] error — the
+    /// kernel send buffer is full and back-to-back `WouldBlock`
+    /// returns exceeded the backpressure threshold.
+    ///
+    /// Added in 0.20.1 (Plan 232 — closes B19).
+    pub fn is_backpressure(&self) -> bool {
+        matches!(self, Self::Backpressure { .. })
     }
 
     /// Check if this is an [`Error::DumpInterrupted`].
