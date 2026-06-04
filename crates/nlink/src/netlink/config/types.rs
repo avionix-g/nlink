@@ -1082,6 +1082,18 @@ pub enum DeclaredQdiscType {
         jitter_us: Option<u32>,
         loss_percent: Option<f64>,
         limit: Option<u32>,
+        /// Packet-duplication probability (netem `duplicate`).
+        duplicate_percent: Option<f64>,
+        /// Packet-corruption probability (netem `corrupt`).
+        corrupt_percent: Option<f64>,
+        /// Packet-reorder probability (netem `reorder`).
+        reorder_percent: Option<f64>,
+        /// Loss-correlation between adjacent packets
+        /// (netem `loss <p>% <corr>%`).
+        loss_correlation: Option<f64>,
+        /// Delay-correlation between adjacent packets
+        /// (netem `delay <t> <jitter> <corr>%`).
+        delay_correlation: Option<f64>,
     },
     /// Hierarchical Token Bucket.
     Htb { default_class: u32 },
@@ -1148,6 +1160,11 @@ impl QdiscBuilder {
             jitter_us: None,
             loss_percent: None,
             limit: None,
+            duplicate_percent: None,
+            corrupt_percent: None,
+            reorder_percent: None,
+            loss_correlation: None,
+            delay_correlation: None,
         });
         self
     }
@@ -1191,6 +1208,78 @@ impl QdiscBuilder {
     pub fn loss_pct(mut self, percent: crate::util::Percent) -> Self {
         if let Some(DeclaredQdiscType::Netem { loss_percent, .. }) = &mut self.qdisc_type {
             *loss_percent = Some(percent.as_percent());
+        }
+        self
+    }
+
+    /// Set netem packet-duplication probability.
+    ///
+    /// Mirror of `NetemConfig::duplicate(Percent)` for the
+    /// declarative path (Plan 228 extension, 0.21).
+    pub fn duplicate_pct(mut self, percent: crate::util::Percent) -> Self {
+        if let Some(DeclaredQdiscType::Netem { duplicate_percent, .. }) =
+            &mut self.qdisc_type
+        {
+            *duplicate_percent = Some(percent.as_percent());
+        }
+        self
+    }
+
+    /// Set netem packet-corruption probability.
+    ///
+    /// Mirror of `NetemConfig::corrupt(Percent)` for the
+    /// declarative path (Plan 228 extension, 0.21).
+    pub fn corrupt_pct(mut self, percent: crate::util::Percent) -> Self {
+        if let Some(DeclaredQdiscType::Netem { corrupt_percent, .. }) =
+            &mut self.qdisc_type
+        {
+            *corrupt_percent = Some(percent.as_percent());
+        }
+        self
+    }
+
+    /// Set netem packet-reorder probability.
+    ///
+    /// Mirror of `NetemConfig::reorder(Percent, …)` for the
+    /// declarative path (Plan 228 extension, 0.21). The
+    /// declarative form takes only the primary reorder
+    /// probability; reorder correlation is a separate setter
+    /// (`reorder_correlation_pct`) for symmetry with the other
+    /// correlation knobs — call both to mirror the imperative
+    /// 2-arg form.
+    pub fn reorder_pct(mut self, percent: crate::util::Percent) -> Self {
+        if let Some(DeclaredQdiscType::Netem { reorder_percent, .. }) =
+            &mut self.qdisc_type
+        {
+            *reorder_percent = Some(percent.as_percent());
+        }
+        self
+    }
+
+    /// Set netem loss correlation (correlation between adjacent
+    /// packets' loss outcomes).
+    ///
+    /// Mirror of `NetemConfig::loss_correlation(Percent)` for the
+    /// declarative path (Plan 228 extension, 0.21).
+    pub fn loss_correlation_pct(mut self, percent: crate::util::Percent) -> Self {
+        if let Some(DeclaredQdiscType::Netem { loss_correlation, .. }) =
+            &mut self.qdisc_type
+        {
+            *loss_correlation = Some(percent.as_percent());
+        }
+        self
+    }
+
+    /// Set netem delay correlation (correlation between adjacent
+    /// packets' delay outcomes).
+    ///
+    /// Mirror of `NetemConfig::delay_correlation(Percent)` for the
+    /// declarative path (Plan 228 extension, 0.21).
+    pub fn delay_correlation_pct(mut self, percent: crate::util::Percent) -> Self {
+        if let Some(DeclaredQdiscType::Netem { delay_correlation, .. }) =
+            &mut self.qdisc_type
+        {
+            *delay_correlation = Some(percent.as_percent());
         }
         self
     }
@@ -1662,5 +1751,102 @@ mod plan_228_tests {
             .loss_pct(Percent::from_fraction(0.015))
             .build();
         assert_eq!(netem_loss(&q), Some(1.5));
+    }
+
+    // Plan 228 extension (0.21) — netem parity setters.
+    // Each takes Percent; the stored f64 must equal the percent value.
+
+    fn netem_field<F>(q: &DeclaredQdisc, project: F) -> Option<f64>
+    where
+        F: Fn(&DeclaredQdiscType) -> Option<f64>,
+    {
+        project(&q.qdisc_type)
+    }
+
+    #[test]
+    fn duplicate_pct_stores_percent() {
+        let q = QdiscBuilder::new("eth0")
+            .netem()
+            .duplicate_pct(Percent::new(2.5))
+            .build();
+        let v = netem_field(&q, |t| match t {
+            DeclaredQdiscType::Netem { duplicate_percent, .. } => *duplicate_percent,
+            _ => None,
+        });
+        assert_eq!(v, Some(2.5));
+    }
+
+    #[test]
+    fn corrupt_pct_stores_percent() {
+        let q = QdiscBuilder::new("eth0")
+            .netem()
+            .corrupt_pct(Percent::new(0.75))
+            .build();
+        let v = netem_field(&q, |t| match t {
+            DeclaredQdiscType::Netem { corrupt_percent, .. } => *corrupt_percent,
+            _ => None,
+        });
+        assert_eq!(v, Some(0.75));
+    }
+
+    #[test]
+    fn reorder_pct_stores_percent() {
+        let q = QdiscBuilder::new("eth0")
+            .netem()
+            .reorder_pct(Percent::new(5.0))
+            .build();
+        let v = netem_field(&q, |t| match t {
+            DeclaredQdiscType::Netem { reorder_percent, .. } => *reorder_percent,
+            _ => None,
+        });
+        assert_eq!(v, Some(5.0));
+    }
+
+    #[test]
+    fn loss_correlation_pct_stores_percent() {
+        let q = QdiscBuilder::new("eth0")
+            .netem()
+            .loss_correlation_pct(Percent::new(25.0))
+            .build();
+        let v = netem_field(&q, |t| match t {
+            DeclaredQdiscType::Netem { loss_correlation, .. } => *loss_correlation,
+            _ => None,
+        });
+        assert_eq!(v, Some(25.0));
+    }
+
+    #[test]
+    fn delay_correlation_pct_stores_percent() {
+        let q = QdiscBuilder::new("eth0")
+            .netem()
+            .delay_correlation_pct(Percent::new(50.0))
+            .build();
+        let v = netem_field(&q, |t| match t {
+            DeclaredQdiscType::Netem { delay_correlation, .. } => *delay_correlation,
+            _ => None,
+        });
+        assert_eq!(v, Some(50.0));
+    }
+
+    #[test]
+    fn all_netem_setters_clamp_via_percent() {
+        // Out-of-range values clamp at the Percent boundary, not at
+        // the storage f64.
+        let q = QdiscBuilder::new("eth0")
+            .netem()
+            .duplicate_pct(Percent::new(200.0))   // → 100.0
+            .corrupt_pct(Percent::new(-10.0))     // → 0.0
+            .reorder_pct(Percent::new(50.0))
+            .build();
+        let dup = netem_field(&q, |t| match t {
+            DeclaredQdiscType::Netem { duplicate_percent, .. } => *duplicate_percent,
+            _ => None,
+        });
+        let cor = netem_field(&q, |t| match t {
+            DeclaredQdiscType::Netem { corrupt_percent, .. } => *corrupt_percent,
+            _ => None,
+        });
+        assert_eq!(dup, Some(100.0));
+        assert_eq!(cor, Some(0.0));
     }
 }

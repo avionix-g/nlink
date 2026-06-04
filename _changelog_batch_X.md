@@ -69,3 +69,18 @@ for the deprecation removals.
   `test-audit-message-accessor-convention.sh` self-test guarding
   the audit script itself (Plan 237 pattern).
 
+### Added
+
+- **Plan 228 extension — declarative netem parity setters.**
+  `QdiscBuilder` (declarative path) gains
+  `duplicate_pct(Percent)`, `corrupt_pct(Percent)`,
+  `reorder_pct(Percent)`, `loss_correlation_pct(Percent)`, and
+  `delay_correlation_pct(Percent)` — mirrors of the imperative
+  `NetemConfig`'s `duplicate` / `corrupt` / `reorder` /
+  `loss_correlation` / `delay_correlation`. Closes the
+  declarative-vs-imperative gap the original Plan 228 left open
+  (the 0.20.1 batch only shipped `loss_pct`). `DeclaredQdiscType::Netem`
+  gains the corresponding `Option<f64>` fields; downstream
+  consumers of the enum need to handle them or use `..` rest
+  patterns.
+
