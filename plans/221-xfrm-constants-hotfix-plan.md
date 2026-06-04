@@ -299,9 +299,22 @@ CI gate (the standard 14 + integration-tests):
 
 ## 7. Cut sequence
 
+The 0.19.1 hotfix train bundles **two plans into one PR**:
+- Plan 221 (this plan — the surgical fix for the XFRM constants
+  and dispatch + the CtKey constant)
+- [Plan 222.1](222-sizeof-gate-constants-plan.md) §2.5 — the
+  XFRM / nft CT phase of the new constant-value sizeof gate,
+  which locks 221's fix so a future commit can't re-introduce
+  the bug.
+
+Cut sequence:
+
 1. Branch `0.19.1-hotfix` from `master` head (currently `9f6bf20`).
-2. Land this plan as a single commit (the surface is small enough
-   that splitting would be ceremony).
+2. Land Plan 221 + Plan 222.1 as two commits in the same PR
+   (split for review readability — fix first, then gate). The
+   sizeof gate's XFRM + nft CT modules MUST land in this PR; if
+   they slip to 0.20, the bug class can re-recur during the
+   intervening cycle.
 3. PR `0.19.1-hotfix → master`, wait for 14 CI gates green.
 4. Merge to master.
 5. Bump workspace version `0.19.0 → 0.19.1` in `Cargo.toml`.

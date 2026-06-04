@@ -162,6 +162,34 @@ dispatcher centralizes the handling and routes it correctly.
 loop template stay authoritative; the dispatcher's recv loop is
 the canonical implementation of the template.
 
+### 4.1 Deliberate divergence from neli
+
+Cross-checked against neli's reference implementation at
+`neli/src/router/asynchronous.rs` (verified during the
+consolidation review). **neli does NOT special-case ENOBUFS**
+— when the kernel emits an ENOBUFS error into a subscriber's
+queue, neli treats it the same as any other parse failure and
+the subscriber may quietly drop frames.
+
+This plan's ENOBUFS-to-`ResyncMarker::ResyncStart` routing is a
+deliberate improvement. neli's behavior is silent data loss;
+ours is "loud" data loss (the marker fires, the subscriber
+knows, the Plan 151 wrapper re-syncs). The cost is the marker
+type's existence and the wrapper's complexity — both shipped
+in 0.19 specifically to make this routing possible.
+
+This is also a divergence from `rtnetlink`-the-crate (which
+doesn't have a dispatcher at all) and from the bare `netlink-sys`
+crate (which leaves recv-loop handling entirely to the caller).
+nlink's dispatcher closes the gap.
+
+Worth highlighting in the eventual 0.20 CHANGELOG entry:
+*"Plan 234's dispatcher routes ENOBUFS specifically to multicast
+subscribers via `ResyncMarker::ResyncStart`, deliberately
+diverging from neli's behavior. neli silently drops frames on
+ENOBUFS; nlink surfaces the marker so the Plan 151 resync
+wrapper recovers."*
+
 ## 5. API surface stability
 
 **No public API changes.** The full `Connection<P>` method
@@ -205,6 +233,37 @@ Three classes of test.
 - Existing integration tests (with `nlink::require_root!()`)
   must pass — the dispatcher must not regress any wire-format
   test.
+
+### 6.1.1 Per-family integration tests
+
+If Plan 235 (GENL command unification) ships in the same cycle,
+its per-family migration tests cover the dispatcher's correctness
+across every GENL family. If Plan 235 doesn't ship, Plan 234
+**must** ship the equivalent coverage itself — otherwise the
+dispatcher is exercised against only `Connection<Route>` paths
+and the GENL families (which have their own command-recv loops
+the dispatcher now unifies) are untested through the new path.
+
+Per-family tests required (all `require_root!()` + appropriate
+module gating):
+
+| Family | Test gist | Module gate |
+|---|---|---|
+| Wireguard | `set_device` + `get_device` round-trip via dispatcher | `wireguard` |
+| Macsec | `add_link` + `del_link` for a macsec device | `macsec` |
+| MPTCP | `get_limits` + `set_limits` round-trip | `mptcp_pm` |
+| Ethtool | `get_link_info` for a dummy device | `dummy` (eth driver always present) |
+| Nl80211 | `get_interface` (returns empty list on no-wifi hosts; that's the test) | n/a (kernel always has wireless infra) |
+| Devlink | `device_dump` (returns empty list on no-devlink hosts; that's the test) | n/a |
+| DPLL | `pin_dump` round-trip | `dpll` (per Plan 226 §5.4) |
+| net_shaper | `caps_get` for a dummy device | `dummy` |
+
+Each test runs 100 commands while a multicast stream is open
+on the same `Arc<Connection>`. Assert: the multicast stream
+delivers events only from its subscribed group (no stale
+unicast responses crossover); the request task gets all 100
+responses with no `FamilyNotFound` (a pre-dispatcher stale-frame
+race for wg_command); request p99 latency stays bounded.
 
 ### 6.2 Performance / non-regression
 

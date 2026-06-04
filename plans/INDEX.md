@@ -19,10 +19,17 @@ tag + GitHub release on master. Durable narrative:
 - [`CHANGELOG.md ## [0.19.0]`](../CHANGELOG.md)
 - [`docs/migration_guide/0.18.0-to-0.19.0.md`](../docs/migration_guide/0.18.0-to-0.19.0.md)
 
-## 0.20 cycle — open
+## 0.20 cycle — open, with 0.19.1 hotfix carved out
 
 Audit pass on `0.20` head `05d388a` (2026-06-04) surfaced 60
-findings; 16 plans written. Cycle theme:
+findings; 16 plans written, expanded to 18 after consolidation
+review (Plans 236 + 237 added as cycle-wide rubrics).
+
+The audit produces **two releases**: a 0.19.1 hotfix train
+(Plans 221 + 222.1) and the 0.20 cycle proper (Plans 222.2-4 +
+223-237 + discretionary 197 / 234 / 235).
+
+Cycle theme:
 
 > *Constants are part of the wire format too.*
 
@@ -43,12 +50,21 @@ Audit artefacts at repo root (deleted at cut time per CLAUDE.md
 - [`AUDIT_BUGS.md`](../AUDIT_BUGS.md) — 20 findings
 - [`AUDIT_API.md`](../AUDIT_API.md) — 22 findings
 
-### Master + hotfix
+### 0.19.1 hotfix train (one PR; ships first)
+
+| # | Plan | Status | Notes |
+|---|---|---|---|
+| 221 | [XFRM constants hotfix](221-xfrm-constants-hotfix-plan.md) | URGENT | 6 CRITICAL XFRM + 1 HIGH CtKey surgical fix |
+| 222.1 | [Sizeof gate Phase 1 — XFRM/nft CT](222-sizeof-gate-constants-plan.md) §2.5 | URGENT | Locks 221's fix at build-time |
+
+Both plans land in the same PR on `0.19.1-hotfix` branch.
+Cut sequence in [Plan 221 §7](221-xfrm-constants-hotfix-plan.md#7-cut-sequence).
+
+### 0.20 cycle master
 
 | # | Plan | Status | Notes |
 |---|---|---|---|
 | 220 | [0.20 master](220-0.20-master-plan.md) | planning complete | Cycle scope, ordering, exit criteria |
-| 221 | [XFRM constants hotfix → 0.19.1](221-xfrm-constants-hotfix-plan.md) | URGENT | Gates 0.19.1 ship; 6 CRITICAL XFRM + 1 HIGH CtKey |
 
 ### Durable prevention
 
@@ -74,8 +90,15 @@ Audit artefacts at repo root (deleted at cut time per CLAUDE.md
 | # | Plan | Severity | Notes |
 |---|---|---|---|
 | 229 | [Doc-drift sweep + compile-tested examples](229-doc-drift-sweep-plan.md) | MID doc-only | Closes A4/A5/A18/A22 |
-| 232 | [Bug-hunt LOW-tier batch](232-bug-hunt-low-tier-plan.md) | LOW | Closes B6/B9-B11/B13-B14/B17-B19 |
-| 233 | [`DumpStream` fuse-on-error policy](233-dumpstream-fuse-policy-plan.md) | MEDIUM | Closes B7/B16; documents dump vs event asymmetry |
+| 232 | [Bug-hunt LOW-tier batch](232-bug-hunt-low-tier-plan.md) | LOW | Closes B6/B9-B11/B13-B15/B17-B19 |
+| 233 | [`DumpStream` fuse-on-error policy](233-dumpstream-fuse-policy-plan.md) | MEDIUM | Closes B7; documents dump vs event policy (B16) |
+
+### Cycle-wide rubrics (added post-consolidation)
+
+| # | Plan | Notes |
+|---|---|---|
+| 236 | [Adversarial-input testing rubric](236-adversarial-input-rubric-plan.md) | Pins specific malformed inputs per plan; cycle-wide test discipline |
+| 237 | [Audit-script self-test pattern](237-audit-script-self-test-plan.md) | Covers Plans 222 + 223 + retrofits the 4 existing audit scripts |
 
 ### Discretionary (cycle ships without these if budget is tight)
 
@@ -88,24 +111,44 @@ Audit artefacts at repo root (deleted at cut time per CLAUDE.md
 ### Cycle dependency graph
 
 ```
-221 (hotfix) ──→ 222.1 (sizeof gate XFRM/nft phase) ──→ 0.19.1 ship
-   │                       │
-   │                       └──→ 222.2/3/4 (broader gate coverage)
-   │
-   master → 0.20 merge
-   │
-   └──→ {223, 224, 225, 226, 227, 228, 230, 231, 229, 232, 233}
-          (12 deterministic plans; mostly independent)
-   │
-   └──→ {197, 234, 235} (discretionary; opt-in if cycle budget allows)
-   │
-   └──→ docs/migration_guide/0.19.0-to-0.20.0.md written
-   │
-   └──→ CHANGELOG promoted + cargo publish
+0.19.1 hotfix train (one PR):
+  Plan 221 + Plan 222.1 ──→ master → cargo publish nlink 0.19.1 → tag v0.19.1
+                                                                       │
+                                                       cargo yank ≤0.19.0
+                                                                       │
+                                              master → 0.20 (cycle branch)
+
+0.20 cycle (post-hotfix, parallel):
+  Plan 222.2/3/4 (broader sizeof gate)         ─┐
+  Plan 223 BE sweep                            ─┤
+  Plan 224 MSG_TRUNC                           ─┤
+  Plan 225 WG timespec                         ─┤
+  Plan 226 DPLL sint                           ─┤
+  Plan 227 AddressFamily                       ─┼── parallel
+  Plan 230 ChainName                           ─┤
+  Plan 231 RuleMessage                         ─┤
+  Plan 228 Percent  ──→  Plan 229 doc sweep    ─┤   (only ordering dep)
+  Plan 232 LOW batch                           ─┤
+  Plan 233 DumpStream policy                   ─┤
+  Plan 236 adversarial-input rubric            ─┤
+  Plan 237 audit-script self-tests             ─┘
+                                                │
+  Discretionary slot (cycle ships without):    │
+     234 NlRouter > 235 Phase 4 > 235 Phase 3 > 197 ovpn
+                                                │
+                                                ▼
+  docs/migration_guide/0.19.0-to-0.20.0.md
+                                                │
+  CHANGELOG [Unreleased] → [0.20.0]
+                                                │
+  cargo publish (nlink-macros → wait → nlink) → tag v0.20.0
+                                                │
+  Open 0.21 branch, rewrite this INDEX
 ```
 
-The only deterministic ordering is **228 → 229** — the doc sweep
-needs to know the final builder shape.
+The only deterministic ordering inside the 0.20 cycle is
+**228 → 229** — the doc sweep needs the final builder shape.
+The 0.19.1 train ships first regardless.
 
 ## 0.21 cycle seed
 
