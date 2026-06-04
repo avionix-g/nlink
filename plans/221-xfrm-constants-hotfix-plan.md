@@ -195,7 +195,11 @@ Six new tests under
 
 ```rust
 nlink::require_root!();
-nlink::require_modules!("xfrm_user", "xfrm_state", "xfrm_policy");
+nlink::require_module!("xfrm_user");
+// (Note: `xfrm_state` and `xfrm_policy` are NOT standalone modules — they're
+// always-built core of `xfrm_state.c` / `xfrm_policy.c`; `xfrm_user` is the
+// only loadable entry point that `/sys/module/<name>` will show. This
+// matches the existing test pattern at `cycle_0_19_backfill.rs:461`.)
 ```
 
 | Test | Pre-fix behaviour | Post-fix behaviour |
@@ -211,10 +215,12 @@ The `flush_policy_does_not_touch_sas` test is the load-bearing one
 — it would have **caught and failed against** the broken 0.19
 behaviour from day one if it had existed.
 
-### 4.1 New CI modprobe entries
+### 4.1 CI modprobe entries
 
-`.github/workflows/integration-tests.yml` — add `xfrm_user` to the
-modprobed list (it's not auto-loaded on every kernel).
+`.github/workflows/integration-tests.yml` already loads `xfrm_user`
+at line 102 (alongside `xfrm4_tunnel` + `xfrm6_tunnel`). No
+workflow edit needed for the XFRM tests — they'll run on every CI
+push.
 
 ## 5. Migration impact
 
@@ -288,7 +294,8 @@ Pre-merge gate (must all pass):
 
 CI gate (the standard 14 + integration-tests):
 - The new `xfrm_hotfix.rs` integration tests run in the privileged
-  CI job. `xfrm_user` modprobe added.
+  CI job. `xfrm_user` modprobe is already in the workflow YAML
+  (line 102) — no edit needed.
 
 ## 7. Cut sequence
 

@@ -425,6 +425,20 @@ The integration test is the soft path — real DPLL hardware
 isn't always present. The unit + synthetic-frame tests in §5.1
 and §5.2 are the load-bearing coverage.
 
+### 5.4 CI workflow modprobe addition
+
+`.github/workflows/integration-tests.yml` does NOT currently
+modprobe `dpll` (verified: the workflow loads `xfrm_user`,
+`nf_conntrack`, `nf_nat`, `wireguard`, `dummy`, `veth`, but not
+`dpll`). Without it, the integration test in §5.3 skips clean on
+every CI run because `/sys/module/dpll` isn't present.
+
+Add `dpll` to the modprobe list. The DPLL module is built-in on
+some kernels (CONFIG_DPLL=y); the modprobe is a no-op when it's
+built in, and a load when it's modular. The `require_module!`
+macro checks `/sys/module/<name>`, which the kernel populates for
+both cases.
+
 ## 6. Risks
 
 - **Breaking-change axis: `Option<i32> → Option<i64>`**.
