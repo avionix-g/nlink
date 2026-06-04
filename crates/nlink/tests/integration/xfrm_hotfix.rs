@@ -282,64 +282,27 @@ async fn del_sa_with_srcaddr_uses_correct_filter() -> Result<()> {
     .await
 }
 
-/// W4 regression — Plan 153.1 (XFRMA_OFFLOAD_DEV) shipped with the
+/// W4 regression — Plan 153.1 (`XFRMA_OFFLOAD_DEV`) shipped with the
 /// attribute ID hardcoded to 26 (which is `XFRMA_ADDRESS_FILTER`,
-/// a 24-byte struct). Every `offload(...)` call emitted an 8-byte
-/// `xfrm_user_offload` under the wrong attr ID — strict-checking
-/// kernels EINVALed (size mismatch); lenient kernels parsed the 8
-/// bytes as a truncated address_filter and silently dropped the
-/// offload request.
+/// a 24-byte struct). Plan 221 corrected the ID to 28.
 ///
-/// This test is best-effort: real XFRM offload requires a NIC with
-/// `xfrm_state_offload` ops + a `CONFIG_XFRM_OFFLOAD=y` kernel and
-/// an SA pinned to that NIC. CI runners almost never have one. We
-/// verify the round-trip succeeds without EINVAL — if the test
-/// environment doesn't support offload at all, the kernel rejects
-/// at the `xfrm_dev_state_add` stage with `EOPNOTSUPP`, which we
-/// accept as a pass (the bytes parsed correctly; the offload
-/// itself isn't available).
+/// **No kernel-touching test ships here**: distinguishing the two
+/// EINVAL paths kernel-side requires either offload-capable hardware
+/// (which CI lacks) or `NETLINK_EXT_ACK` text parsing (which not all
+/// kernels emit for this code path). The post-fix value is locked by
+/// the build-time gates in `crates/nlink/src/netlink/sys_sizeof.rs`
+/// (`plan_222_1_xfrm_attr_ids_match_kernel_uapi`) and the inline
+/// assertion in `crates/nlink/src/netlink/xfrm.rs::xfrm_offload_kernel_constants`.
+/// Both fail the build if `XFRMA_OFFLOAD_DEV` drifts from `28`.
 #[tokio::test]
-async fn add_sa_with_offload_does_not_einval_on_attribute_size() -> Result<()> {
-    nlink::require_root!();
-    nlink::require_module!("xfrm_user");
-    with_timeout(async {
-        let ns = TestNamespace::new("p221-offload")?;
-        let xfrm = xfrm_in_ns(&ns)?;
-
-        let src: IpAddr = "10.0.0.1".parse().unwrap();
-        let dst: IpAddr = "10.0.0.2".parse().unwrap();
-
-        // ifindex 1 (loopback) — accept either Ok (kernel accepted
-        // the offload — unlikely on lo) or a kernel-side rejection
-        // that ISN'T EINVAL on the attribute size (which would
-        // indicate the attribute ID is still wrong).
-        let sa = make_test_sa(src, dst, 0xAAAA_BBBB, 1)
-            .offload(1, nlink::netlink::xfrm::XfrmOffloadFlag::PACKET);
-
-        match xfrm.add_sa(sa).await {
-            Ok(()) => {} // unlikely but acceptable
-            Err(e) if e.is_invalid_argument() => {
-                // EINVAL specifically is what we're guarding against —
-                // pre-fix the wrong attr ID produced a length mismatch
-                // that strict-checking kernels surfaced as EINVAL on the
-                // XFRMA_ADDRESS_FILTER policy.len check. Post-fix the
-                // attr ID is correct so EINVAL on attribute size cannot
-                // happen.
-                return Err(nlink::Error::InvalidMessage(format!(
-                    "Plan 221 W4: add_sa with offload returned EINVAL — the attribute size \
-                     check fired, meaning XFRMA_OFFLOAD_DEV is still going out under the \
-                     wrong attr ID. Underlying: {e}"
-                )));
-            }
-            Err(_e) => {
-                // Anything else (EOPNOTSUPP — kernel doesn't have offload
-                // support compiled in, ENODEV — loopback doesn't have
-                // xdo_dev_state_add, etc.) is acceptable. The wire
-                // shape parsed correctly; the offload-vs-no-offload
-                // story is out of scope for this hotfix.
-            }
-        }
-        Ok(())
-    })
-    .await
+#[ignore = "Plan 221 W4 — verified at build time by sys_sizeof gates, not by kernel \
+            round-trip (CI runners lack xfrm_state_offload-capable NICs and the EINVAL \
+            from no-offload kernels is indistinguishable from the attribute-size EINVAL \
+            without ext_ack text parsing)"]
+async fn add_sa_with_offload_attr_id_locked_by_constants_gate() -> Result<()> {
+    // Intentionally empty — see ignore reason. The W4 regression is
+    // verified by:
+    //   - crates/nlink/src/netlink/sys_sizeof.rs `plan_222_1_xfrm_attr_ids_match_kernel_uapi`
+    //   - crates/nlink/src/netlink/xfrm.rs `xfrm_offload_kernel_constants`
+    Ok(())
 }

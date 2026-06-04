@@ -4,18 +4,30 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
-## [0.19.1] - 2026-06-04
+## [0.20.0] - 2026-06-04
 
-Hotfix release. **`Connection::<Xfrm>::flush_sp()` was silently
-flushing all SAs instead of all SPs** since the XFRM family
-shipped. Four XFRM constants (`XFRM_MSG_FLUSHSA`,
+**Emergency release with breaking wire-format corrections.**
+
+`Connection::<Xfrm>::flush_sp()` was silently flushing all
+Security Associations instead of all Security Policies since the
+XFRM family shipped. Four XFRM constants (`XFRM_MSG_FLUSHSA`,
 `XFRM_MSG_FLUSHPOLICY`, `XFRMA_SRCADDR`, `XFRMA_OFFLOAD_DEV`)
 were miscounted from the kernel UAPI enum and produced
-catastrophically wrong wire bytes on common XFRM operations.
-Plus two related dispatch errors and a `CtKey::Expiration`
-constant that was reading the wrong conntrack field. All
-yanked back to 0.18.0; the minimum-viable nlink version is now
-0.19.1.
+catastrophically wrong wire bytes. Plus two dispatch errors
+(`update_sa`/`update_sp` always returned EEXIST) and a
+`CtKey::Expiration` discriminant change that was loading the
+wrong conntrack field.
+
+The `CtKey::Expiration` discriminant change (`7 → 5`) is a
+breaking ABI change at the byte level: pre-0.20 anyone using
+`CtKey::Expiration as u32` got `7` (the wrong value); post-0.20
+they get `5` (the correct value). The change requires a minor
+version bump in 0.x.y semver. The remainder of the 0.20-cycle
+plan suite (sweeps 222.2-237 + the typed-API tightening +
+discretionary 197/234/235) slides forward into 0.21.0.
+
+All shipped nlink versions yanked back to 0.15.x; the
+minimum-viable version is now 0.20.0.
 
 ### Fixed — XFRM constants (Plan 221)
 
@@ -117,7 +129,7 @@ included in 0.19.1 by virtue of the master state.
 ### Yanked
 
 - `0.19.0`, `0.18.0`, `0.17.0`, `0.16.0`, `0.15.x` — all shipped
-  with the XFRM constant defects. Use 0.19.1+.
+  with the XFRM constant defects. Use 0.20.0+.
 
 ## [0.19.0] - 2026-05-31
 
