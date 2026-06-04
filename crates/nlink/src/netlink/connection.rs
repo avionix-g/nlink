@@ -9,8 +9,8 @@ use super::{
     error::{Error, Result},
     interface_ref::InterfaceRef,
     message::{
-        MessageIter, NLM_F_ACK, NLM_F_DUMP, NLM_F_REQUEST, NLMSG_HDRLEN, NlMsgError, NlMsgHdr,
-        NlMsgType,
+        MessageIter, NLM_F_ACK, NLM_F_DUMP, NLM_F_REQUEST, NLMSG_HDRLEN, NlMsgError, NlMsgType,
+        nlmsg_align,
     },
     parse::FromNetlink,
     protocol::{ProtocolState, Route},
@@ -593,17 +593,28 @@ impl<P: ProtocolState> Connection<P> {
             };
 
             for data in batch.iter() {
+                // Plan 232 B9 — track msg_start with an explicit
+                // counter that advances alongside `MessageIter`
+                // instead of the original raw-pointer subtraction.
+                // Each MessageIter step consumes `nlmsg_align(msg_len)`
+                // bytes; advancing the counter in the same shape
+                // keeps it within `data` by construction.
+                let mut msg_start: usize = 0;
                 for result in MessageIter::new(data) {
                     // 0.19 N2 — see send_request_inner.
                     let Ok((header, payload)) = result else {
                         tracing::trace!(
                             "send_dump: skipping malformed frame in shared recv loop"
                         );
-                        continue;
+                        break;
                     };
+
+                    let msg_len = header.nlmsg_len as usize;
+                    let aligned = nlmsg_align(msg_len);
 
                     // Check sequence number
                     if header.nlmsg_seq != seq {
+                        msg_start = msg_start.saturating_add(aligned);
                         continue;
                     }
 
@@ -629,14 +640,12 @@ impl<P: ProtocolState> Connection<P> {
                         break 'outer;
                     }
 
-                    // Collect the full message (header + payload)
-                    let msg_len = header.nlmsg_len as usize;
-                    let msg_start = payload.as_ptr() as usize
-                        - data.as_ptr() as usize
-                        - std::mem::size_of::<NlMsgHdr>();
+                    // Collect the full message (header + payload).
                     if msg_start + msg_len <= data.len() {
                         responses.push(data[msg_start..msg_start + msg_len].to_vec());
                     }
+                    msg_start = msg_start.saturating_add(aligned);
+                    let _ = payload; // payload still flagged consumed via header check above
                 }
             }
         }

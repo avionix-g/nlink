@@ -297,11 +297,21 @@ impl WireguardConfig {
             // Apply device-level changes (private_key,
             // listen_port, fwmark). All optional — only
             // fields that were declared get written.
+            // Plan 232 B11 — surface as a typed error instead of
+            // panicking. Invariant should hold because `diff` is
+            // computed against `self`; if a future refactor lets
+            // `self` mutate between the diff and apply, this
+            // path returns a clean error instead of crashing the
+            // caller's task.
             let declared = self
                 .devices
                 .iter()
                 .find(|d| &d.ifname == ifname)
-                .expect("declared device must exist for entry in diff");
+                .ok_or_else(|| {
+                    crate::netlink::Error::InvalidMessage(format!(
+                        "wireguard apply: diff references undeclared device `{ifname}`"
+                    ))
+                })?;
 
             if changes.has_device_level_change() {
                 conn.set_device_by_name(ifname, |mut b| {
@@ -327,11 +337,16 @@ impl WireguardConfig {
             }
 
             for (pk, peer_changes) in &changes.peers_to_modify {
+                // Plan 232 B11 — same shape as the device lookup above.
                 let declared_peer = declared
                     .peers
                     .iter()
                     .find(|p| &p.public_key == pk)
-                    .expect("declared peer must exist for diff entry");
+                    .ok_or_else(|| {
+                        crate::netlink::Error::InvalidMessage(format!(
+                            "wireguard apply: diff references undeclared peer for `{ifname}`"
+                        ))
+                    })?;
                 conn.set_peer_by_name(ifname, *pk, |b| {
                     declared_peer.apply_changes_to_builder(b, peer_changes)
                 })
